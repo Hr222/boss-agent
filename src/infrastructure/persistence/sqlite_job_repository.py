@@ -1,0 +1,188 @@
+"""职位仓储：对 SQLite 中的岗位数据提供统一访问接口。"""
+
+import json
+import sqlite3
+from pathlib import Path
+from typing import Any
+
+from src.models.job_description import JobDescription
+from src.models.job_match_result import JobMatchResult
+from src.infrastructure.persistence.sqlite_job_store import JobRecord, SQLiteJobStore
+
+
+class SQLiteJobRepository:
+    """对岗位数据的读写做一层封装，避免业务逻辑直接操作 SQL 行对象。"""
+
+    def __init__(self, db_path: str | Path = "data/boss_jobs.sqlite3") -> None:
+        self.sqlite = SQLiteJobStore(db_path)
+
+    def save_links(self, job_urls: list[str], keyword: str, city: str) -> int:
+        """保存抓取到的岗位链接。"""
+        return self.sqlite.upsert_links(job_urls, keyword=keyword, city=city)
+
+    def save_jobs(self, jobs: list[JobRecord]) -> int:
+        """批量保存岗位信息，仅统计实际写入次数。"""
+        wrote = 0
+        for job in jobs:
+            if self.sqlite.upsert_job_if_changed(job):
+                wrote += 1
+        return wrote
+
+    def get_job_store_stats(self) -> dict[str, int]:
+        """返回岗位库中的基础统计，便于脚本或 demo 做落库校验。"""
+        self.sqlite.init()
+        with self.sqlite._connect() as conn:
+            jobs_total = self._query_count(conn, "SELECT COUNT(*) FROM jobs")
+            links_total = self._query_count(conn, "SELECT COUNT(*) FROM job_links")
+            jobs_with_jd = self._query_count(
+                conn,
+                "SELECT COUNT(*) FROM jobs WHERE jd IS NOT NULL AND TRIM(jd) != ''",
+            )
+        return {
+            "jobs_total": jobs_total,
+            "links_total": links_total,
+            "jobs_with_jd": jobs_with_jd,
+        }
+
+    def get_recent_jobs(self, limit: int = 5) -> list[dict[str, Any]]:
+        """读取最近写入的岗位摘要，便于人工快速确认落库内容。"""
+        self.sqlite.init()
+        with self.sqlite._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT job_url, title, company, salary, city, captured_at
+                FROM jobs
+                ORDER BY captured_at DESC
+                LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_recent_jobs_with_jd(self, limit: int = 10) -> list[dict[str, Any]]:
+        """读取最近落库且带 JD 内容的岗位，用于匹配 demo 或手工核查。"""
+        self.sqlite.init()
+        with self.sqlite._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM jobs
+                WHERE jd IS NOT NULL AND TRIM(jd) != ''
+                ORDER BY captured_at DESC
+                LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_pending_jobs(self, limit: int) -> list[dict[str, Any]]:
+        """读取待匹配岗位。"""
+        return [dict(row) for row in self.sqlite.iter_pending_jobs(limit=limit)]
+
+    def count_pending_jobs(self) -> int:
+        """统计当前待匹配岗位数量。"""
+        return self.sqlite.count_pending_jobs()
+
+    def get_ready_to_apply_jobs(self, limit: int) -> list[dict[str, Any]]:
+        """读取已判定适合、但尚未投递的岗位。"""
+        return [dict(row) for row in self.sqlite.iter_ready_to_apply(limit=limit)]
+
+    def count_ready_to_apply_jobs(self) -> int:
+        """统计已入投递队列、但尚未投递的岗位数量。"""
+        self.sqlite.init()
+        with self.sqlite._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM jobs
+                WHERE (is_suitable = 1) AND (is_applied IS NULL OR is_applied = 0)
+                """
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def save_match_result(
+        self,
+        job_url: str,
+        match_result: JobMatchResult,
+        threshold: float,
+    ) -> int:
+        """保存匹配结果，并返回最终 suitability 状态。"""
+        # Agent 后续动作应以“规则约束后的推荐结果”为主，而不是只看裸分。
+        is_suitable = 1 if (
+            float(match_result.match_score) >= float(threshold)
+            and bool(match_result.is_recommended)
+        ) else 0
+        self.sqlite.set_job_flags(job_url, is_suitable=is_suitable)
+        self.sqlite.update_raw_json(
+            job_url,
+            {
+                "match_score": match_result.match_score,
+                "match_level": match_result.match_level,
+                "match_threshold": threshold,
+                "final_suitability": is_suitable,
+                "greeting_message": match_result.greeting_message,
+                "matched_skills": match_result.matched_skills,
+                "missing_skills": match_result.missing_skills,
+                "analysis": match_result.analysis,
+                "is_recommended": match_result.is_recommended,
+            },
+        )
+        return is_suitable
+
+    def mark_applied(self, job_url: str) -> None:
+        """标记岗位已投递。"""
+        self.sqlite.set_job_flags(job_url, is_applied=1)
+
+    def build_job_description(self, row: dict[str, Any]) -> JobDescription:
+        """把数据库记录转换为业务层使用的 JobDescription。"""
+        job_url = str(row.get("job_url") or "").strip()
+        jd_text = self._clean_jd_text(str(row.get("jd") or "").strip())
+        return JobDescription(
+            job_id=self._parse_job_id(job_url),
+            job_title=str(row.get("title") or ""),
+            company_name=str(row.get("company") or ""),
+            salary_range=str(row.get("salary") or ""),
+            location=str(row.get("city") or ""),
+            job_requirements=jd_text,
+            job_description=jd_text,
+            tags=self._load_tags(row.get("tags_json")),
+            job_url=job_url,
+        )
+
+    @staticmethod
+    def _parse_job_id(job_url: str) -> str:
+        """从 BOSS 职位链接中提取 job_id。"""
+        import re
+
+        match = re.search(r"/job_detail/([^/?]+)\.html", job_url)
+        return match.group(1) if match else job_url
+
+    @staticmethod
+    def _load_tags(tags_json: Any) -> list[str]:
+        """把数据库中的 tags_json 解析成字符串列表。"""
+        if not tags_json:
+            return []
+        try:
+            value = json.loads(tags_json)
+        except Exception:
+            return []
+        return [str(item) for item in value] if isinstance(value, list) else []
+
+    @staticmethod
+    def _query_count(conn: sqlite3.Connection, sql: str) -> int:
+        """执行 count 查询并返回整数结果。"""
+        row = conn.execute(sql).fetchone()
+        return int(row[0]) if row else 0
+
+    @staticmethod
+    def _clean_jd_text(text: str) -> str:
+        """清洗 Boss 页面里混入的样式、站点字样与噪音字符。"""
+        import re
+
+        cleaned = text or ""
+        cleaned = re.sub(r"\.[A-Za-z0-9_-]+\{[^}]*\}", " ", cleaned)
+        cleaned = re.sub(r"[A-Za-z0-9_-]+\{[^}]*\}", " ", cleaned)
+        cleaned = re.sub(r"(BOSS直聘|直聘|boss|kanzhun|来自BOSS直聘)", " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        cleaned = re.sub(r"\s*([：:；;，,。])\s*", r"\1", cleaned)
+        return cleaned.strip()

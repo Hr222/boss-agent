@@ -1,0 +1,74 @@
+{
+  "name": "张三",
+  "phone": "13800138000",
+  "email": "zhangsan@example.com",
+  "target_position": "Python开发工程师",
+  "target_salary": "20K-30K",
+  "target_location": "北京",
+  "years_of_experience": "5年",
+  "skills": [
+    "Python",
+    "Django",
+    "Flask",
+    "FastAPI",
+    "MySQL",
+    "PostgreSQL",
+    "Redis",
+    "MongoDB",
+    "Docker",
+    "Kubernetes",
+    "Nginx",
+    "Git",
+    "CI/CD",
+    "AWS",
+    "Linux",
+    "RabbitMQ",
+    "Elasticsearch"
+  ],
+  "advantages": [
+    "5年Python后端开发经验",
+    "2年团队管理经验",
+    "有高并发系统设计经验",
+    "参与过日活百万级用户项目",
+    "开源项目贡献者"
+  ],
+  "self_introduction": "我是一名热爱技术的Python开发者，有5年后端开发经验，擅长构建高可用、高性能的系统架构。热爱开源，是多个知名Python项目的贡献者。",
+  "education": [
+    {
+      "school": "北京理工大学",
+      "major": "计算机科学与技术",
+      "degree": "本科",
+      "graduation_date": "2018-06"
+    }
+  ],
+  "work_experience": [
+    {
+      "company": "某知名互联网公司",
+      "position": "高级Python开发工程师",
+      "start_date": "2021-03",
+      "end_date": null,
+      "description": "负责核心业务系统的开发和维护，主导微服务架构改造，提升系统性能50%以上。带领5人团队完成多个重要项目。"
+    },
+    {
+      "company": "某科技公司",
+      "position": "Python开发工程师",
+      "start_date": "2019-07",
+      "end_date": "2021-02",
+      "description": "参与公司核心产品开发，负责后端API设计和实现，优化数据库查询性能，支撑百万级用户访问。"
+    }
+  ],
+  "project_experience": [
+    {
+      "name": "电商平台微服务改造",
+      "role": "技术负责人",
+      "description": "将单体应用拆分为微服务架构，使用Docker+Kubernetes部署，建立完善的监控体系，系统可用性从99.5%提升到99.95%。",
+      "technologies": ["Python", "FastAPI", "Kubernetes", "Redis", "MySQL", "Prometheus"]
+    },
+    {
+      "name": "实时数据处理系统",
+      "role": "核心开发",
+      "description": "设计并实现高并发数据处理系统，使用消息队列处理每秒10万+的请求，数据处理延迟降低到100ms以内。",
+      "technologies": ["Python", "RabbitMQ", "Elasticsearch", "Redis", "Docker"]
+    }
+  ]
+}

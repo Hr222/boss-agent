@@ -1,0 +1,13 @@
+# 当前项目运行所需的核心依赖。
+
+# Boss 浏览器自动化
+nodriver>=0.39
+
+# Z.ai / 智谱 AI SDK
+zai-sdk>=0.2.2
+
+# 数据模型
+pydantic>=2.0.0
+
+# 配置管理
+python-dotenv>=1.0.0
