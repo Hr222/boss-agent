@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from src.models.ai_model import AIModel
-from src.models.generic_greeting_model import GenericGreetingModel
+from src.models.frontend_greeting_model import FrontendGreetingModel
 from src.models.job_description import JobDescription
 from src.models.resume_profile import ResumeProfile
 from src.models.strategies.candidate_strategy import CandidateStrategy
@@ -206,11 +206,8 @@ class FrontendStrategy(CandidateStrategy):
         resume: ResumeProfile,
         match_data: dict[str, Any],
     ) -> str:
-        """前端方向使用更贴近 ES6+ / TS / Vue 生态的通用招呼语模型。"""
-        return GenericGreetingModel(
-            ai_model,
-            domain_label="前端工程化（ES6+ / TypeScript / Vue）",
-        ).generate_greeting(jd, resume, match_data)
+        """前端方向走独立的前端 4 段式招呼语生成链路。"""
+        return FrontendGreetingModel(ai_model).generate_greeting(jd, resume, match_data)
 
     def infer_from_resume(self, resume: ResumeProfile) -> bool:
         """按前端关键词粗判是否适合。"""
