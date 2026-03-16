@@ -55,12 +55,15 @@ ZAI_API_KEY=your_api_key_here
 ZAI_API_KEY=your_api_key_here
 ZAI_BASE_URL=https://open.bigmodel.cn/api/paas/v4/
 BOSS_DEBUG=0
+BOSS_DUMP_AFTER_LOGIN=1
 BOSS_USER_DATA_DIR=.nodriver_user_data\\boss
 ```
 
 说明：
 
 - `.env` 已在 `.gitignore` 中，不应提交真实密钥
+- `BOSS_DEBUG=1` 时才会输出 `data/boss_debug/` 下的 Boss 页面截图和 HTML
+- `BOSS_DUMP_AFTER_LOGIN=1` 只在 `BOSS_DEBUG=1` 的前提下生效，用来控制是否导出登录后的页面
 - 示例配置见 [.env.example](/mnt/c/pycharm/pythonproject/.env.example)
 
 ## 运行方式

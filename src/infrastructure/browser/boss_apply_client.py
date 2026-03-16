@@ -1,6 +1,7 @@
 """Boss 直聘投递客户端：封装 nodriver 页面交互。"""
 
 import asyncio
+import html
 import json
 import os
 import re
@@ -439,7 +440,65 @@ class BossApplyClient:
             await asyncio.sleep(POLL_INTERVAL_SEC)
         return None
 
+    async def _fill_chat_input(self, chat_input, greeting: str, debug: bool) -> bool:
+        """优先用 DOM 赋值，避免富文本输入时丢换行或转义特殊字符。"""
+        normalized_greeting = greeting.replace("\r\n", "\n").replace("\r", "\n")
+        script = f"""
+        (el) => {{
+            const value = {json.dumps(normalized_greeting)};
+            const dispatchInputEvents = () => {{
+                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            }};
+            if (!el) {{
+                return false;
+            }}
+            if (typeof el.value === 'string') {{
+                el.focus();
+                el.value = value;
+                dispatchInputEvents();
+                return el.value === value;
+            }}
+            if (el.isContentEditable) {{
+                el.focus();
+                el.innerHTML = '';
+                const lines = value.split('\\n');
+                lines.forEach((line, index) => {{
+                    if (index > 0) {{
+                        el.appendChild(document.createElement('br'));
+                    }}
+                    el.appendChild(document.createTextNode(line));
+                }});
+                dispatchInputEvents();
+                return (el.innerText || el.textContent || '').replace(/\\r\\n/g, '\\n') === value;
+            }}
+            return false;
+        }}
+        """
+        try:
+            filled = await chat_input.apply(script)
+            return bool(filled)
+        except Exception as error:
+            if debug:
+                print(f"[debug] DOM 填充输入框失败，回退 send_keys: {error}")
+            return False
+
+    @staticmethod
+    def _normalize_greeting_for_chat(greeting: str) -> str:
+        """把易被聊天富文本错误展示的 ASCII 箭头替换成稳定字符。"""
+        normalized = html.unescape(greeting or "")
+        replacements = {
+            "->": "→",
+            "<-": "←",
+            "=>": "⇒",
+            "<=": "⇐",
+        }
+        for raw, target in replacements.items():
+            normalized = normalized.replace(raw, target)
+        return normalized
+
     async def _send_greeting(self, tab, greeting: str, debug: bool, dry_run: bool, fill_only: bool) -> bool:
+        greeting = self._normalize_greeting_for_chat(greeting)
         if not greeting.strip():
             return False
         chat_input = await self._find_chat_input(tab)
@@ -460,7 +519,9 @@ class BossApplyClient:
                 await chat_input.clear_input()
             except Exception:
                 pass
-            await chat_input.send_keys(greeting)
+            filled = await self._fill_chat_input(chat_input, greeting, debug=debug)
+            if not filled:
+                await chat_input.send_keys(greeting)
             if fill_only:
                 await tab.sleep(0.15)
                 return True

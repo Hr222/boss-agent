@@ -14,7 +14,7 @@ class FrontendGreetingModel:
     """Generate frontend-oriented greetings with the validated 4-paragraph structure."""
 
     GREETING_POSTSCRIPT = (
-        "P.S. 这条消息是我开发的求职agent自动生成(LLM分析JD->个性化生成->主动发送),"
+        "P.S. 这条消息是我开发的求职agent自动生成(LLM分析JD→个性化生成→主动发送),"
         "也是我展示自我能力的一部分.后续由本人亲自回复~"
     )
 

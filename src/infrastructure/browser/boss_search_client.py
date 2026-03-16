@@ -103,8 +103,10 @@ class BossSearchClient:
         city = (options.city or "").strip()
         city_code = (options.city_code or "").strip() or CITY_CODES.get(city, "")
         url = self._build_search_url(keyword, city_code)
-        dump_dir = Config.resolve_project_path(os.getenv("BOSS_DUMP_DIR", "data/boss_debug"))
-        dump_dir.mkdir(parents=True, exist_ok=True)
+        dump_dir = None
+        if options.debug:
+            dump_dir = Config.resolve_project_path(os.getenv("BOSS_DUMP_DIR", "data/boss_debug"))
+            dump_dir.mkdir(parents=True, exist_ok=True)
         # 搜索主流程默认复用当前浏览器窗口，避免每次启动多开一个新窗口。
         new_window = _env_bool("BOSS_NEW_WINDOW", False)
 
@@ -128,7 +130,7 @@ class BossSearchClient:
                 await tab.sleep(1.0)
                 await tab
 
-            if _env_bool("BOSS_DUMP_AFTER_LOGIN", True):
+            if options.debug and dump_dir is not None and _env_bool("BOSS_DUMP_AFTER_LOGIN", True):
                 try:
                     png, html = await self._dump_page(tab, dump_dir, "boss_after_login")
                     print(f"[debug] 已导出登录后页面: {png} / {html}")
@@ -155,8 +157,10 @@ class BossSearchClient:
         target_new_jobs: int,
     ) -> dict[str, Any]:
         """从已打开的搜索页继续滚动抓取，直到拿到一批新的岗位。"""
-        dump_dir = Config.resolve_project_path(os.getenv("BOSS_DUMP_DIR", "data/boss_debug"))
-        dump_dir.mkdir(parents=True, exist_ok=True)
+        dump_dir = None
+        if options.debug:
+            dump_dir = Config.resolve_project_path(os.getenv("BOSS_DUMP_DIR", "data/boss_debug"))
+            dump_dir.mkdir(parents=True, exist_ok=True)
         scroll_rounds = int(os.getenv("BOSS_AGENT_SCROLL_ROUNDS", "6"))
         scroll_amount = int(os.getenv("BOSS_AGENT_SCROLL_AMOUNT", os.getenv("BOSS_SCROLL_AMOUNT", "400")))
         scroll_pause_seconds = float(os.getenv("BOSS_AGENT_SCROLL_PAUSE_SECONDS", "0.6"))
@@ -270,7 +274,7 @@ class BossSearchClient:
             stats["new_jobs_written"] = stats["jobs_written"]
             session_seen_urls.update(job.job_url for job in unique_new_jobs if job.job_url)
 
-        if not unique_new_jobs and options.debug:
+        if not unique_new_jobs and options.debug and dump_dir is not None:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             png = dump_dir / f"boss_search_round_empty_{ts}.png"
             html = dump_dir / f"boss_search_round_empty_{ts}.html"
