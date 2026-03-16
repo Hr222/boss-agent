@@ -6,7 +6,7 @@ from pathlib import Path
 from src.config.settings import Config
 from src.infrastructure.browser.nodriver_runtime import _env_bool
 from src.models.job_apply_model import JobApplyModel, JobApplyRequest
-from src.models.job_agent_flow_model import JobAgentFlowModel, JobAgentFlowRequest
+from src.models.job_application_agent import JobApplicationAgent, JobApplicationAgentRequest
 from src.models.job_repository import JobRepository
 from src.models.job_screening_model import JobScreeningModel
 from src.models.manual_job_model import ManualJobModel
@@ -25,14 +25,14 @@ class ConsoleController:
         manual_job_model: ManualJobModel | None = None,
         job_screening_model: JobScreeningModel | None = None,
         job_apply_model: JobApplyModel | None = None,
-        job_agent_flow_model: JobAgentFlowModel | None = None,
+        job_application_agent: JobApplicationAgent | None = None,
     ) -> None:
         self.view = view or ConsoleView()
         self.resume_store = resume_store or ResumeStore()
         self.manual_job_model = manual_job_model or ManualJobModel()
         self.job_screening_model = job_screening_model or JobScreeningModel()
         self.job_apply_model = job_apply_model or JobApplyModel()
-        self.job_agent_flow_model = job_agent_flow_model or JobAgentFlowModel()
+        self.job_application_agent = job_application_agent or JobApplicationAgent()
 
     def run(self) -> None:
         """运行主菜单循环。"""
@@ -155,13 +155,11 @@ class ConsoleController:
         except ValueError:
             self.view.show_invalid_number()
             return
-        # 允许用户在控制台里切换当前使用的岗位库。
         self.job_screening_model.use_repository(JobRepository(params["db_path"]))
         self.job_screening_model.use_strategy(params["strategy_id"])
         results = self.job_screening_model.analyze_pending_jobs(
             limit=limit,
             threshold=threshold,
-            out_dir=params["out_dir"],
         )
         if not results:
             self.view.show_no_pending_jobs()
@@ -199,7 +197,7 @@ class ConsoleController:
             self.view.show_invalid_number()
             return
 
-        request = JobAgentFlowRequest(
+        request = JobApplicationAgentRequest(
             db_path=params["db_path"],
             target_apply_count=target_apply_count,
             min_match_batch_size=min(max(min_match_batch_size, 5), 10),
@@ -209,7 +207,7 @@ class ConsoleController:
             greetings_dir=params["greetings_dir"],
             debug=_env_bool("BOSS_DEBUG", False),
         )
-        result = asyncio.run(self.job_agent_flow_model.run(request))
+        result = asyncio.run(self.job_application_agent.run(request))
         self.view.show_agent_flow_result(result)
 
     def _save_result(self, jd_info: dict, match_result: dict, greeting: str) -> Path:

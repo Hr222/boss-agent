@@ -10,15 +10,23 @@ from pathlib import Path
 from urllib.parse import urljoin
 
 from src.config.settings import Config
+from src.infrastructure.browser.boss_apply.chat_template import BossApplyChatTemplate
+from src.infrastructure.browser.boss_apply.legacy_template import BossApplyLegacyTemplate
+from src.infrastructure.browser.boss_apply.router import BossApplyTemplateRouter
+from src.infrastructure.browser.boss_apply.strategy import BossApplyStrategy
+from src.infrastructure.browser.boss_apply.types import (
+    ApplyJobResult,
+    CHAT_READY_TIMEOUT_SEC,
+    CHAT_TARGET_TIMEOUT_SEC,
+    DETAIL_READY_TIMEOUT_SEC,
+    PreparedChatTab,
+    TemplateType,
+)
 from src.infrastructure.browser.nodriver_runtime import _env_bool, _import_nodriver
 from src.models.greeting_archive_model import GreetingArchiveModel
 
 
 ORIGIN = "https://www.zhipin.com"
-DETAIL_READY_TIMEOUT_SEC = float(os.getenv("BOSS_DETAIL_READY_TIMEOUT_SEC", "1"))
-CHAT_READY_TIMEOUT_SEC = float(os.getenv("BOSS_CHAT_READY_TIMEOUT_SEC", "1"))
-CHAT_TARGET_TIMEOUT_SEC = float(os.getenv("BOSS_CHAT_TARGET_TIMEOUT_SEC", "1"))
-POLL_INTERVAL_SEC = float(os.getenv("BOSS_POLL_INTERVAL_SEC", "0.03"))
 
 
 @dataclass(frozen=True)
@@ -33,6 +41,8 @@ class BossApplyOptions:
     greeting_text: str | None = None
     debug: bool = False
     target_apply_count: int | None = None
+    apply_retries: int = 2
+    max_apply_failures: int = 3
 
 
 class BossApplyClient:
@@ -41,15 +51,26 @@ class BossApplyClient:
     def __init__(self) -> None:
         self.uc = _import_nodriver()
         self.archive_model = GreetingArchiveModel()
+        self.template_router = BossApplyTemplateRouter()
+        self.template_strategies: dict[TemplateType, BossApplyStrategy] = {
+            "chat": BossApplyChatTemplate(self.uc, chat_debug_enabled=self._chat_debug_enabled),
+            "legacy": BossApplyLegacyTemplate(),
+        }
+
+    @staticmethod
+    def _chat_debug_enabled(debug: bool) -> bool:
+        """聊天页专项调试开关，避免普通 debug 时输出过多细节。"""
+        return bool(debug) and _env_bool("BOSS_CHAT_DEBUG", False)
 
     async def apply_jobs(
         self,
         queue: list[dict],
         *,
         mark_applied,
+        mark_apply_failed=None,
         options: BossApplyOptions,
         browser=None,
-    ) -> list[dict]:
+    ) -> list[ApplyJobResult]:
         """执行岗位投递或预览填充。"""
         # 这里只负责浏览器自动化，不做岗位是否适合的业务判断。
         owns_browser = browser is None
@@ -63,7 +84,7 @@ class BossApplyClient:
                 print(">>> 浏览器已打开，请先手动完成登录。")
                 await self._ensure_manual_login(bootstrap_tab, debug=options.debug)
 
-        results: list[dict] = []
+        results: list[ApplyJobResult] = []
         greetings_dir = Config.resolve_project_path(options.greetings_dir)
         sent_count = 0
         target_apply_count = options.target_apply_count
@@ -77,10 +98,11 @@ class BossApplyClient:
                     row,
                     greetings_dir=greetings_dir,
                     mark_applied=mark_applied,
+                    mark_apply_failed=mark_apply_failed,
                     options=options,
                 )
                 results.append(result)
-                if result.get("status") == "ok":
+                if result.status == "ok":
                     sent_count += 1
                 if target_apply_count and sent_count >= target_apply_count:
                     print(f">>> 已达到本轮目标：实际发送 {sent_count} 个岗位。")
@@ -88,12 +110,12 @@ class BossApplyClient:
 
         # 主线路批量投递完成后直接结束，避免一直挂起等待人工中断。
         processed_count = len(results)
-        success_count = sum(1 for item in results if item.get("status") == "ok")
-        already_contacted_count = sum(1 for item in results if item.get("reason") == "already_contacted")
+        success_count = sum(1 for item in results if item.status == "ok")
+        already_contacted_count = sum(1 for item in results if item.reason == "already_contacted")
         skipped_count = sum(
-            1 for item in results if item.get("status") == "skipped" and item.get("reason") != "already_contacted"
+            1 for item in results if item.status == "skipped" and item.reason != "already_contacted"
         )
-        failed_count = sum(1 for item in results if item.get("status") == "failed")
+        failed_count = sum(1 for item in results if item.status == "failed")
         print(
             f">>> 本轮处理结束，共处理 {processed_count} 个岗位："
             f"成功处理 {success_count}，其中实际发送 {sent_count}，"
@@ -125,22 +147,23 @@ class BossApplyClient:
         *,
         greetings_dir: Path,
         mark_applied,
+        mark_apply_failed,
         options: BossApplyOptions,
-    ) -> dict:
+    ) -> ApplyJobResult:
         """处理单个岗位的详情打开、沟通按钮点击和消息发送。"""
         job_url = str(row.get("job_url") or "").strip()
         if not job_url:
-            return {"status": "skipped", "reason": "missing_job_url"}
+            return ApplyJobResult(status="skipped", reason="missing_job_url", job_url="")
 
         open_url = job_url if job_url.startswith("http") else urljoin(ORIGIN, job_url)
         if not open_url:
-            return {"status": "skipped", "reason": "invalid_job_url", "job_url": job_url}
+            return ApplyJobResult(status="skipped", reason="invalid_job_url", job_url=job_url)
 
         raw_json = row.get("raw_json")
         greeting = self._resolve_greeting(open_url, raw_json, greetings_dir, options)
         if not greeting:
             print(f"跳过（无招呼语）: {open_url}")
-            return {"status": "skipped", "reason": "missing_greeting", "job_url": open_url}
+            return ApplyJobResult(status="skipped", reason="missing_greeting", job_url=open_url)
 
         print(f"\n[apply] {open_url}")
         # 记录当前已有 target，便于识别“立即沟通”后是否新开了聊天 target。
@@ -158,17 +181,34 @@ class BossApplyClient:
                 mark_applied(job_url)
             if not options.no_close_tab:
                 await self._safe_close_tab(job_tab)
-            return {"status": "skipped", "reason": "already_contacted", "job_url": open_url}
+            return ApplyJobResult(status="skipped", reason="already_contacted", job_url=open_url)
 
         # 详情页和聊天页之间可能会跳 target，这里统一做收敛。
-        job_tab = await self._prepare_chat_tab(browser, job_tab, known_target_ids, debug=options.debug)
-        ok = await self._send_greeting(
-            job_tab,
-            greeting,
-            debug=options.debug,
-            dry_run=options.dry_run,
-            fill_only=options.fill_only,
-        )
+        prepared_chat = await self._prepare_chat_tab(browser, job_tab, known_target_ids, debug=options.debug)
+        job_tab = prepared_chat.tab
+        # chat 页一旦触发发送动作，重复重试更容易造成重复消息，因此只做单次尝试。
+        retry_attempts = 1 if prepared_chat.template_type == "chat" else (max(int(options.apply_retries), 0) + 1)
+        ok = False
+        failure_reason = "send_failed"
+        for attempt_index in range(retry_attempts):
+            ok = await self._send_greeting(
+                job_tab,
+                greeting,
+                template_type=prepared_chat.template_type,
+                debug=options.debug,
+                dry_run=options.dry_run,
+                fill_only=options.fill_only,
+            )
+            if ok:
+                break
+            if options.debug:
+                print(f"[debug] 第 {attempt_index + 1}/{retry_attempts} 次发送失败。")
+            if attempt_index >= retry_attempts - 1:
+                break
+            try:
+                await job_tab.sleep(0.6)
+            except Exception:
+                pass
 
         if ok:
             if options.dry_run:
@@ -189,11 +229,19 @@ class BossApplyClient:
             status = "ok"
         else:
             print("✗ 发送失败（或未找到输入框）")
+            failure_count = 0
+            if callable(mark_apply_failed) and not options.dry_run and not options.fill_only:
+                failure_count = mark_apply_failed(job_url, failure_reason)
+                if failure_count >= max(int(options.max_apply_failures), 1):
+                    print(
+                        f"[apply] 岗位累计失败 {failure_count} 次，"
+                        f"已达到上限，后续自动投递将跳过该岗位。"
+                    )
             status = "failed"
 
         if not options.no_close_tab:
             await self._safe_close_tab(job_tab)
-        return {"status": status, "job_url": open_url}
+        return ApplyJobResult(status=status, job_url=open_url)
 
     async def _start_browser(self):
         """按项目约定启动带用户数据目录的 Chrome 实例。"""
@@ -314,18 +362,9 @@ class BossApplyClient:
                 continue
         return False
 
-    async def _find_chat_input(self, tab):
-        for selector in ["textarea", "textarea.input-area", "textarea.chat-input", "div[contenteditable='true']", "[contenteditable='true']"]:
-            try:
-                el = await tab.select(selector, timeout=4)
-            except Exception:
-                continue
-            try:
-                if await el.apply("(e) => !!(e && e.offsetParent !== null)"):
-                    return el
-            except Exception:
-                return el
-        return None
+    def _resolve_chat_template_type(self, tab) -> TemplateType:
+        """通过模板路由器解析当前页面应使用的发送模板。"""
+        return self.template_router.resolve(tab)
 
     async def _wait_for_detail_ready(self, tab, debug: bool, timeout_sec: float = DETAIL_READY_TIMEOUT_SEC) -> bool:
         deadline = asyncio.get_running_loop().time() + timeout_sec
@@ -354,57 +393,6 @@ class BossApplyClient:
                 print(f"[debug] 新标签页二次导航失败: {e}")
         return job_tab
 
-    async def _click_send_button(self, tab, debug: bool) -> bool:
-        text_candidates = ["发送", "发出", "立即发送"]
-        for text in text_candidates:
-            try:
-                el = await tab.find(text, best_match=True, timeout=2)
-                if not el:
-                    continue
-                try:
-                    visible = await el.apply("(e) => !!(e && e.offsetParent !== null)")
-                    if not visible:
-                        continue
-                except Exception:
-                    pass
-                try:
-                    await el.apply("(e) => e.scrollIntoView({block: 'center'})")
-                except Exception:
-                    pass
-                try:
-                    await el.click()
-                except Exception:
-                    await el.apply("(e) => e.click()")
-                await tab.sleep(0.35)
-                return True
-            except Exception as e:
-                if debug:
-                    print(f"[debug] 点击发送按钮「{text}」失败: {e}")
-
-        for selector in ["button[type='submit']", ".send-btn", ".btn-send", ".chat-op button", ".chat-controls button", "button"]:
-            try:
-                el = await tab.select(selector, timeout=2)
-                if not el:
-                    continue
-                text = await el.apply("(e) => (e.innerText || e.textContent || '').trim()")
-                if selector != "button" and not any(keyword in str(text) for keyword in text_candidates):
-                    pass
-                elif selector == "button" and not any(keyword in str(text) for keyword in text_candidates):
-                    continue
-                try:
-                    await el.apply("(e) => e.scrollIntoView({block: 'center'})")
-                except Exception:
-                    pass
-                try:
-                    await el.click()
-                except Exception:
-                    await el.apply("(e) => e.click()")
-                await tab.sleep(0.35)
-                return True
-            except Exception:
-                continue
-        return False
-
     async def _wait_for_chat_ready(self, tab, debug: bool, timeout_sec: float = CHAT_READY_TIMEOUT_SEC) -> bool:
         deadline = asyncio.get_running_loop().time() + timeout_sec
         last_url = ""
@@ -417,9 +405,31 @@ class BossApplyClient:
             if debug and current_url and current_url != last_url:
                 print(f"[debug] chat wait url -> {current_url}")
                 last_url = current_url
-            if await self._find_chat_input(tab):
+            template_type = self._resolve_chat_template_type(tab)
+            strategy = self.template_strategies[template_type]
+            if await strategy.is_ready(tab):
                 return True
-            await tab.sleep(POLL_INTERVAL_SEC)
+            await tab.sleep(float(os.getenv("BOSS_POLL_INTERVAL_SEC", "0.03")))
+        return False
+
+    async def _wait_for_same_tab_chat_redirect(self, tab, debug: bool, timeout_sec: float = CHAT_TARGET_TIMEOUT_SEC) -> bool:
+        deadline = asyncio.get_running_loop().time() + timeout_sec
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                await tab
+            except Exception:
+                pass
+            current_url = str(getattr(tab, "url", "") or "")
+            if self.template_router.resolve(tab) == "chat":
+                if self._chat_debug_enabled(debug):
+                    print(f"[debug] current tab redirected to chat -> {current_url}")
+                await self.template_strategies["chat"].dump_page_if_needed(
+                    tab,
+                    prefix="boss_chat_same_tab",
+                    debug=debug,
+                )
+                return True
+            await asyncio.sleep(float(os.getenv("BOSS_POLL_INTERVAL_SEC", "0.03")))
         return False
 
     async def _wait_for_chat_target(self, browser, known_target_ids: set[str], debug: bool, timeout_sec: float = CHAT_TARGET_TIMEOUT_SEC):
@@ -434,55 +444,16 @@ class BossApplyClient:
                 if not target_id or target_id in known_target_ids:
                     continue
                 candidate_url = str(getattr(candidate, "url", "") or "")
-                if debug:
+                if self._chat_debug_enabled(debug):
                     print(f"[debug] new target detected -> {candidate_url or target_id}")
+                await self.template_strategies["chat"].dump_page_if_needed(
+                    candidate,
+                    prefix="boss_chat_new_target",
+                    debug=debug,
+                )
                 return candidate
-            await asyncio.sleep(POLL_INTERVAL_SEC)
+            await asyncio.sleep(float(os.getenv("BOSS_POLL_INTERVAL_SEC", "0.03")))
         return None
-
-    async def _fill_chat_input(self, chat_input, greeting: str, debug: bool) -> bool:
-        """优先用 DOM 赋值，避免富文本输入时丢换行或转义特殊字符。"""
-        normalized_greeting = greeting.replace("\r\n", "\n").replace("\r", "\n")
-        script = f"""
-        (el) => {{
-            const value = {json.dumps(normalized_greeting)};
-            const dispatchInputEvents = () => {{
-                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-            }};
-            if (!el) {{
-                return false;
-            }}
-            if (typeof el.value === 'string') {{
-                el.focus();
-                el.value = value;
-                dispatchInputEvents();
-                return el.value === value;
-            }}
-            if (el.isContentEditable) {{
-                el.focus();
-                el.innerHTML = '';
-                const lines = value.split('\\n');
-                lines.forEach((line, index) => {{
-                    if (index > 0) {{
-                        el.appendChild(document.createElement('br'));
-                    }}
-                    el.appendChild(document.createTextNode(line));
-                }});
-                dispatchInputEvents();
-                return (el.innerText || el.textContent || '').replace(/\\r\\n/g, '\\n') === value;
-            }}
-            return false;
-        }}
-        """
-        try:
-            filled = await chat_input.apply(script)
-            return bool(filled)
-        except Exception as error:
-            if debug:
-                print(f"[debug] DOM 填充输入框失败，回退 send_keys: {error}")
-            return False
-
     @staticmethod
     def _normalize_greeting_for_chat(greeting: str) -> str:
         """把易被聊天富文本错误展示的 ASCII 箭头替换成稳定字符。"""
@@ -497,47 +468,32 @@ class BossApplyClient:
             normalized = normalized.replace(raw, target)
         return normalized
 
-    async def _send_greeting(self, tab, greeting: str, debug: bool, dry_run: bool, fill_only: bool) -> bool:
+    async def _send_greeting(
+        self,
+        tab,
+        greeting: str,
+        *,
+        template_type: TemplateType | None = None,
+        debug: bool,
+        dry_run: bool,
+        fill_only: bool,
+    ) -> bool:
         greeting = self._normalize_greeting_for_chat(greeting)
         if not greeting.strip():
             return False
-        chat_input = await self._find_chat_input(tab)
-        if not chat_input:
-            if debug:
-                print("[debug] 未找到聊天输入框")
-            return False
-        try:
-            await chat_input.apply("(e) => e.focus()")
-        except Exception:
-            pass
-        if dry_run:
-            if debug:
-                print("[debug] dry-run: 已定位输入框，未发送")
-            return True
-        try:
-            try:
-                await chat_input.clear_input()
-            except Exception:
-                pass
-            filled = await self._fill_chat_input(chat_input, greeting, debug=debug)
-            if not filled:
-                await chat_input.send_keys(greeting)
-            if fill_only:
-                await tab.sleep(0.15)
-                return True
-            if await self._click_send_button(tab, debug=debug):
-                return True
-            if debug:
-                print("[debug] 未找到发送按钮，回退到回车发送")
-            await chat_input.send_keys("\n")
-            await tab.sleep(0.35)
-            return True
-        except Exception as e:
-            if debug:
-                print(f"[debug] 发送招呼语失败: {e}")
-            return False
+        resolved_template_type = template_type or self._resolve_chat_template_type(tab)
+        if self._chat_debug_enabled(debug):
+            print(f"[debug] 当前发送模板: {resolved_template_type}")
+        strategy = self.template_strategies[resolved_template_type]
+        return await strategy.send_greeting(
+            tab,
+            greeting,
+            debug=debug,
+            dry_run=dry_run,
+            fill_only=fill_only,
+        )
 
-    async def _prepare_chat_tab(self, browser, job_tab, known_target_ids: set[str], debug: bool):
+    async def _prepare_chat_tab(self, browser, job_tab, known_target_ids: set[str], debug: bool) -> PreparedChatTab:
         clicked = await self._click_start_chat(job_tab, debug=debug)
         if not clicked:
             detail_ready = await self._wait_for_detail_ready(job_tab, debug=debug, timeout_sec=DETAIL_READY_TIMEOUT_SEC)
@@ -547,15 +503,40 @@ class BossApplyClient:
         if not clicked:
             if debug:
                 print("[debug] 未点击到「立即沟通/继续沟通」按钮，仍尝试寻找输入框")
-            return job_tab
+            return PreparedChatTab(
+                tab=job_tab,
+                template_type=self._resolve_chat_template_type(job_tab),
+                ready=False,
+            )
+        same_tab_redirected = await self._wait_for_same_tab_chat_redirect(
+            job_tab,
+            debug=debug,
+            timeout_sec=max(CHAT_TARGET_TIMEOUT_SEC, 2.0),
+        )
+        if same_tab_redirected:
+            ready = await self._wait_for_chat_ready(job_tab, debug=debug, timeout_sec=max(CHAT_READY_TIMEOUT_SEC, 3.0))
+            if debug and not ready:
+                print("[debug] 当前 tab 已跳转聊天页，但在等待时间内未进入聊天输入态")
+            return PreparedChatTab(
+                tab=job_tab,
+                template_type=self._resolve_chat_template_type(job_tab),
+                ready=ready,
+            )
         redirected_tab = await self._wait_for_chat_target(browser, known_target_ids, debug=debug, timeout_sec=CHAT_TARGET_TIMEOUT_SEC)
         if redirected_tab:
             job_tab = redirected_tab
             await job_tab
-        ready = await self._wait_for_chat_ready(job_tab, debug=debug, timeout_sec=CHAT_READY_TIMEOUT_SEC)
+        ready = await self._wait_for_chat_ready(job_tab, debug=debug, timeout_sec=max(CHAT_READY_TIMEOUT_SEC, 3.0))
         if debug and not ready:
             print("[debug] 已点击沟通按钮，但在等待时间内未进入聊天输入态")
-        return job_tab
+        template_type = self._resolve_chat_template_type(job_tab)
+        if self._chat_debug_enabled(debug):
+            print(f"[debug] 当前页面模板判定: {template_type}")
+        return PreparedChatTab(
+            tab=job_tab,
+            template_type=template_type,
+            ready=ready,
+        )
 
     async def _ensure_manual_login(self, tab, debug: bool) -> None:
         input(">>> 请在浏览器完成登录后按回车继续: ")

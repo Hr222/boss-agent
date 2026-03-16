@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from src.models.ai_model import AIModel
+from src.models.ai_service import AIModel
 from src.models.greeting_model import GreetingModel
 from src.models.job_description import JobDescription
 from src.models.resume_profile import ResumeProfile

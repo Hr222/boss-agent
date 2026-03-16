@@ -1,4 +1,4 @@
-"""CLI controller for Boss job search collection."""
+"""岗位抓取命令入口。"""
 
 import argparse
 import os
@@ -9,12 +9,13 @@ except ModuleNotFoundError:  # pragma: no cover
     load_dotenv = None
 
 from src.infrastructure.browser.nodriver_runtime import _env_bool, run_async_entrypoint
-from src.models.resume_store import ResumeStore
 from src.models.job_repository import JobRepository
 from src.models.job_search_model import JobSearchModel, JobSearchRequest
+from src.models.resume_store import ResumeStore
 
 
 async def main() -> None:
+    """解析命令行参数并执行 Boss 搜索抓取。"""
     if load_dotenv is not None:
         load_dotenv()
 
@@ -27,6 +28,7 @@ async def main() -> None:
     parser.add_argument("--require-login", action="store_true", help="Wait for manual login before collecting links.")
     parser.add_argument("--no-collect", action="store_true", help="Only open the page; do not collect job links.")
     args = parser.parse_args()
+
     resume = ResumeStore().load_resume()
     exclude_company_names: tuple[str, ...] = ()
     if resume:

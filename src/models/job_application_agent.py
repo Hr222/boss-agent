@@ -1,19 +1,20 @@
-"""闭环求职 Agent：串联抓取、匹配、入队与投递。"""
+"""求职 Agent：负责执行搜索、筛选、入队与投递的闭环流程。"""
 
-from dataclasses import dataclass
-from pathlib import Path
+from dataclasses import asdict, dataclass
+import os
 
 from src.config.settings import Config
 from src.infrastructure.browser.boss_search_client import BossSearchClient, BossSearchOptions
-from src.models.resume_store import ResumeStore
-from src.models.boss_apply_browser import BossApplyBrowserModel, BossApplyOptions
+from src.models.boss_apply_facade import BossApplyFacade, BossApplyOptions
+from src.models.job_apply_model import JobApplySummary
 from src.models.job_repository import JobRepository
-from src.models.job_screening_model import JobScreeningModel
+from src.models.job_screening_model import JobScreeningModel, ScreeningJobResult
+from src.models.resume_store import ResumeStore
 
 
 @dataclass(frozen=True)
-class JobAgentFlowRequest:
-    """一键求职 Agent 的运行参数。"""
+class JobApplicationAgentRequest:
+    """求职 Agent 运行参数。"""
 
     db_path: str = "data/boss_jobs.sqlite3"
     keyword: str = ""
@@ -28,42 +29,60 @@ class JobAgentFlowRequest:
     debug: bool = False
 
 
-class JobAgentFlowModel:
-    """负责执行抓取 -> 匹配 -> 入队 -> 投递的闭环流程。"""
+@dataclass(frozen=True)
+class AgentRunSummary:
+    """求职 Agent 单次运行汇总。"""
+
+    status: str
+    target_apply_count: int
+    sent_count: int
+    already_contacted_count: int
+    ready_count: int
+
+    def to_dict(self) -> dict:
+        """兼容现有控制台与命令行展示。"""
+        return asdict(self)
+
+
+class JobApplicationAgent:
+    """执行搜索、筛选、投递闭环的核心 Agent。
+
+    这里是“流程编排层”，负责决定每一轮先抓多少、筛多少、投多少。
+    它不直接处理页面细节，也不直接实现匹配规则；这些能力分别下沉到
+    search client、screening model 和 apply facade。
+    """
 
     def __init__(
         self,
         repository: JobRepository | None = None,
         search_client: BossSearchClient | None = None,
-        screening_model: JobScreeningModel | None = None,
-        apply_browser_model: BossApplyBrowserModel | None = None,
+        screening_service: JobScreeningModel | None = None,
+        apply_facade: BossApplyFacade | None = None,
     ) -> None:
         self.repository = repository or JobRepository()
         self.search_client = search_client or BossSearchClient()
-        self.screening_model = screening_model or JobScreeningModel()
-        self.apply_browser_model = apply_browser_model or BossApplyBrowserModel()
+        self.screening_service = screening_service or JobScreeningModel()
+        self.apply_facade = apply_facade or BossApplyFacade()
         self.resume_store = ResumeStore()
 
     def use_repository(self, repository: JobRepository) -> None:
-        """切换当前使用的岗位仓储。"""
+        """切换当前 Agent 使用的岗位仓储。"""
         self.repository = repository
-        self.screening_model.use_repository(repository)
+        self.screening_service.use_repository(repository)
 
-    async def run(self, request: JobAgentFlowRequest) -> dict:
+    async def run(self, request: JobApplicationAgentRequest) -> AgentRunSummary:
         """运行闭环 Agent，直到实际发送数量达到目标值。"""
         repository = JobRepository(request.db_path)
         self.use_repository(repository)
-        self.screening_model.use_strategy(request.strategy_id)
+        self.screening_service.use_strategy(request.strategy_id)
         Config.resolve_project_path(request.greetings_dir).mkdir(parents=True, exist_ok=True)
 
-        browser = await self.apply_browser_model._start_browser()
+        browser = await self.apply_facade._start_browser()
         session_seen_urls: set[str] = set()
         total_sent_count = 0
         total_already_contacted_count = 0
 
         excluded_company_names = self._load_excluded_company_names()
-        # 搜索客户端内部仍需要一个 limit 字段，但闭环 Agent 不再对用户暴露该参数。
-        # 这里用目标投递数作为初始搜索基数，后续每轮再按剩余待完成数量动态递减。
         search_options = BossSearchOptions(
             keyword=request.keyword,
             city=request.city,
@@ -82,10 +101,10 @@ class JobAgentFlowModel:
             search_tab = await self.search_client.prepare_search_tab(browser, search_options)
 
             while total_sent_count < request.target_apply_count:
+                # 闭环收口标准是“实际发送成功数”，不是“进入队列数”或“已沟通数”。
                 remaining_apply_count = request.target_apply_count - total_sent_count
                 ready_count = repository.count_ready_to_apply_jobs()
 
-                # 当前没有可投递岗位时，先抓取并匹配一轮。
                 if ready_count <= 0:
                     print(
                         f"\n[agent] 开始补充投递队列："
@@ -102,13 +121,11 @@ class JobAgentFlowModel:
                         ),
                     )
                     print(
-                        f"[agent] 抓取完成：新链接 {collect_stats['new_links_found']}，"
-                        f"新岗位 {collect_stats['new_jobs_written']}。"
+                        f"[agent] 抓取完成：新链接 {collect_stats.new_links_found}，"
+                        f"新岗位 {collect_stats.new_jobs_written}。"
                     )
 
-                    # “写库成功”不代表“待匹配成功”。
-                    # 如果这些岗位只是历史岗位被更新了一遍，它们可能已存在 suitability 结果，
-                    # 此时 get_pending_jobs 会返回 0。闭环主流程应以真实待匹配数量为准。
+                    # 只消化本轮新增待分析岗位，避免一次性把历史积压全部吞掉。
                     pending_count = repository.count_pending_jobs()
                     screening_limit = min(
                         max(0, pending_count),
@@ -119,16 +136,19 @@ class JobAgentFlowModel:
                             "[agent] 本轮抓取后没有新增待匹配岗位："
                             "本轮抓到的岗位可能是历史已分析记录，或当前页面未加载出新的未分析岗位。"
                         )
-                    screening_results = (
-                        self.screening_model.analyze_pending_jobs(
+                    screening_results: list[ScreeningJobResult] = (
+                        self.screening_service.analyze_pending_jobs(
                             limit=screening_limit,
                             threshold=request.screening_threshold,
-                            out_dir=request.greetings_dir,
                         )
                         if screening_limit > 0
                         else []
                     )
-                    suitable_count = sum(int(item.get("is_suitable", 0)) for item in screening_results if item.get("status") == "ok")
+                    suitable_count = sum(
+                        int(item.is_suitable)
+                        for item in screening_results
+                        if item.status == "ok"
+                    )
                     print(
                         f"[agent] 匹配完成：分析 {len(screening_results)} 个岗位，"
                         f"新增入队 {suitable_count} 个。"
@@ -137,11 +157,9 @@ class JobAgentFlowModel:
                     ready_count = repository.count_ready_to_apply_jobs()
                     print(f"[agent] 当前待投递队列：{ready_count} 个。")
                     if ready_count <= 0:
-                        # 这一轮没有匹配出可投递岗位，就继续下一轮抓取。
                         continue
 
-                # 这一轮只要队列里已有岗位，就把当前已入队岗位全部发完。
-                # 这样即使在本轮发送过程中已经达到用户目标，也不会把同轮已匹配成功的岗位截断留到下次。
+                # 进入投递阶段后，优先清空当前待投递队列，保证队列状态单调收敛。
                 queue = repository.get_ready_to_apply_jobs(limit=ready_count)
                 apply_options = BossApplyOptions(
                     require_login=False,
@@ -151,15 +169,20 @@ class JobAgentFlowModel:
                     greetings_dir=request.greetings_dir,
                     debug=request.debug,
                     target_apply_count=None,
+                    apply_retries=max(int(os.getenv("BOSS_APPLY_RETRIES", "2")), 0),
+                    max_apply_failures=max(int(os.getenv("BOSS_APPLY_MAX_FAILURES", "3")), 1),
                 )
-                apply_results = await self.apply_browser_model.apply_jobs(
+                apply_results = JobApplySummary(
+                    results=await self.apply_facade.apply_jobs(
                     queue,
                     mark_applied=repository.mark_applied,
+                    mark_apply_failed=repository.mark_apply_failed,
                     options=apply_options,
                     browser=browser,
+                    )
                 )
-                sent_this_round = sum(1 for item in apply_results if item.get("status") == "ok")
-                already_contacted_this_round = sum(1 for item in apply_results if item.get("reason") == "already_contacted")
+                sent_this_round = apply_results.sent_count
+                already_contacted_this_round = apply_results.already_contacted_count
                 total_sent_count += sent_this_round
                 total_already_contacted_count += already_contacted_this_round
                 print(
@@ -168,15 +191,15 @@ class JobAgentFlowModel:
                     f"累计实际发送 {total_sent_count}/{request.target_apply_count}。"
                 )
 
-            return {
-                "status": "completed",
-                "target_apply_count": request.target_apply_count,
-                "sent_count": total_sent_count,
-                "already_contacted_count": total_already_contacted_count,
-                "ready_count": repository.count_ready_to_apply_jobs(),
-            }
+            return AgentRunSummary(
+                status="completed",
+                target_apply_count=request.target_apply_count,
+                sent_count=total_sent_count,
+                already_contacted_count=total_already_contacted_count,
+                ready_count=repository.count_ready_to_apply_jobs(),
+            )
         finally:
-            await self.apply_browser_model._safe_close_browser(browser, debug=request.debug)
+            await self.apply_facade._safe_close_browser(browser, debug=request.debug)
 
     def _load_excluded_company_names(self) -> tuple[str, ...]:
         """优先读取简历显式配置的过滤公司名单，未配置时回退到历史任职公司。"""
@@ -206,4 +229,4 @@ class JobAgentFlowModel:
         return max(clamped_batch_size, int(remaining_apply_count))
 
 
-__all__ = ["JobAgentFlowModel", "JobAgentFlowRequest"]
+__all__ = ["AgentRunSummary", "JobApplicationAgent", "JobApplicationAgentRequest"]

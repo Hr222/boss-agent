@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any, Optional
 
-from src.models.ai_model import AIModel
+from src.models.ai_service import AIModel
 from src.models.job_description import JobDescription
 from src.models.job_match_result import JobMatchResult
 from src.models.resume_profile import ResumeProfile
@@ -13,7 +13,15 @@ from src.models.strategies.strategy_factory import StrategyFactory
 
 
 class JobMatchingModel:
-    """按当前策略分析 JD 与简历的匹配度，并生成对应招呼语。"""
+    """按当前策略分析 JD 与简历的匹配度，并生成对应招呼语。
+
+    它不是一个单纯的 LLM client，而是“匹配用例核心”：
+    1. 读取简历
+    2. 执行策略预筛
+    3. 调用大模型做匹配分析
+    4. 执行策略后置兜底
+    5. 生成首条招呼语
+    """
 
     def __init__(
         self,
@@ -43,6 +51,8 @@ class JobMatchingModel:
         if self.strategy_id == "auto":
             self.strategy = StrategyFactory.create_auto(resume)
 
+        # jd_text / resume_text 是给 LLM 的统一输入；precheck / postcheck 则负责把
+        # 领域硬约束收回来，避免最终结果完全受模型自由发挥影响。
         jd_text = self._build_jd_text(jd)
         resume_text = self.resume_store.get_resume_text(resume)
         print(f"正在分析职位匹配[{self.strategy.display_name}]: {jd.job_title} @ {jd.company_name}")

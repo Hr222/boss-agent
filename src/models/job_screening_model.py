@@ -1,14 +1,34 @@
 """批量筛选模型：负责岗位库分析与匹配结果回写。"""
 
+from dataclasses import dataclass
 import re
-from pathlib import Path
 
 from src.models.job_matching_model import JobMatchingModel
 from src.models.job_repository import JobRepository
 
 
+@dataclass(frozen=True)
+class ScreeningJobResult:
+    """单个岗位筛选结果。"""
+
+    job_title: str
+    job_url: str
+    status: str
+    match_score: float = 0.0
+    match_level: str = ""
+    is_recommended: bool = False
+    is_suitable: bool = False
+    analysis: str = ""
+    missing_skills: list[str] | None = None
+    matched_skills: list[str] | None = None
+    greeting_path: str = ""
+
 class JobScreeningModel:
-    """筛选待分析岗位并回写匹配结果。"""
+    """筛选待分析岗位并回写匹配结果。
+
+    它负责“筛选用例”本身：取待分析岗位、调用匹配器、把结果写回岗位库。
+    它不负责控制台展示，也不负责浏览器抓取。
+    """
 
     def __init__(
         self,
@@ -27,9 +47,9 @@ class JobScreeningModel:
         """切换当前批量筛选使用的策略。"""
         self.matching_model.set_strategy(strategy_id)
 
-    def analyze_pending_jobs(self, limit: int, threshold: float, out_dir: str | Path) -> list[dict]:
+    def analyze_pending_jobs(self, limit: int, threshold: float) -> list[ScreeningJobResult]:
         """批量分析未处理岗位。招呼语文件改为发送成功后再归档。"""
-        results: list[dict] = []
+        results: list[ScreeningJobResult] = []
         pending_jobs = self.repository.get_pending_jobs(limit=limit)
         total_jobs = len(pending_jobs)
 
@@ -41,15 +61,16 @@ class JobScreeningModel:
             if match_result is None:
                 print(f"[screening] {index}/{total_jobs} 分析失败: {job.job_title}")
                 results.append(
-                    {
-                        "job_title": job.job_title,
-                        "job_url": job.job_url,
-                        "status": "failed",
-                    }
+                    ScreeningJobResult(
+                        job_title=job.job_title,
+                        job_url=job.job_url,
+                        status="failed",
+                    )
                 )
                 continue
 
             # suitability 既看分数，也看规则约束后的推荐结果。
+            # 仓储层负责最终落库，因此这里把“分析结果”和“是否入队”统一收口。
             is_suitable = self.repository.save_match_result(job.job_url, match_result, threshold)
             reason = self._build_result_reason(match_result.analysis, match_result.missing_skills)
             print(
@@ -59,19 +80,19 @@ class JobScreeningModel:
                 f"reason={reason}"
             )
             results.append(
-                {
-                    "job_title": job.job_title,
-                    "job_url": job.job_url,
-                    "status": "ok",
-                    "match_score": match_result.match_score,
-                    "match_level": match_result.match_level,
-                    "is_recommended": match_result.is_recommended,
-                    "is_suitable": is_suitable,
-                    "analysis": match_result.analysis,
-                    "missing_skills": match_result.missing_skills,
-                    "matched_skills": match_result.matched_skills,
-                    "greeting_path": "",
-                }
+                ScreeningJobResult(
+                    job_title=job.job_title,
+                    job_url=job.job_url,
+                    status="ok",
+                    match_score=match_result.match_score,
+                    match_level=match_result.match_level,
+                    is_recommended=match_result.is_recommended,
+                    is_suitable=bool(is_suitable),
+                    analysis=match_result.analysis,
+                    missing_skills=match_result.missing_skills,
+                    matched_skills=match_result.matched_skills,
+                    greeting_path="",
+                )
             )
 
         return results
@@ -87,4 +108,4 @@ class JobScreeningModel:
         return analysis_text[:120] if analysis_text else "无明显缺口"
 
 
-__all__ = ["JobScreeningModel"]
+__all__ = ["JobScreeningModel", "ScreeningJobResult"]

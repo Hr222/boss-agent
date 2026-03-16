@@ -1,4 +1,4 @@
-"""批量岗位匹配的 CLI 控制器。"""
+"""批量岗位匹配命令入口。"""
 
 import argparse
 import os
@@ -14,7 +14,6 @@ def main() -> None:
     parser.add_argument("--db", default="data/boss_jobs.sqlite3")
     parser.add_argument("--strategy", default=os.getenv("BOSS_MATCH_STRATEGY", "backend_ai"))
     parser.add_argument("--limit", type=int, default=int(os.getenv("BOSS_MATCH_LIMIT", "10")))
-    parser.add_argument("--out-dir", default="data/greetings")
     parser.add_argument("--threshold", type=float, default=float(os.getenv("BOSS_MATCH_THRESHOLD", "75")))
     args = parser.parse_args()
 
@@ -24,19 +23,19 @@ def main() -> None:
 
     model = JobScreeningModel(repository=JobRepository(args.db))
     model.use_strategy(args.strategy)
-    results = model.analyze_pending_jobs(limit=args.limit, threshold=args.threshold, out_dir=args.out_dir)
+    results = model.analyze_pending_jobs(limit=args.limit, threshold=args.threshold)
 
     if not results:
         print("No pending jobs (is_suitable is NULL and jd is not empty).")
         return
 
     for item in results:
-        if item["status"] != "ok":
-            print(f"失败 {item['job_title'] or item['job_url']} | analyze failed")
+        if item.status != "ok":
+            print(f"失败 {item.job_title or item.job_url} | analyze failed")
             continue
         print(
-            f"成功 {item['job_title']} | score={item['match_score']:.1f}({item['match_level']}) | "
-            f"recommended={item['is_recommended']} | suitable={item['is_suitable']} | "
+            f"成功 {item.job_title} | score={item.match_score:.1f}({item.match_level}) | "
+            f"recommended={item.is_recommended} | suitable={item.is_suitable} | "
             "greeting=已写入数据库，发送成功后再落归档文件"
         )
 

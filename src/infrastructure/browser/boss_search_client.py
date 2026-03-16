@@ -6,7 +6,6 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from src.config.settings import Config
 from src.infrastructure.browser.nodriver_runtime import _env_bool, _import_nodriver
@@ -38,6 +37,25 @@ class BossSearchOptions:
     exclude_company_names: tuple[str, ...] = ()
 
 
+@dataclass
+class SearchCollectionSummary:
+    """岗位抓取统计结果。"""
+
+    stored_links: int = 0
+    jobs_written: int = 0
+    links_found: int = 0
+    new_links_found: int = 0
+    new_jobs_written: int = 0
+
+    def absorb(self, other: "SearchCollectionSummary") -> None:
+        """合并另一份抓取统计，便于多阶段汇总。"""
+        self.stored_links = other.stored_links
+        self.jobs_written = other.jobs_written
+        self.links_found = max(self.links_found, other.links_found)
+        self.new_links_found = other.new_links_found
+        self.new_jobs_written = other.new_jobs_written
+
+
 class BossSearchClient:
     """打开 Boss 搜索页，并通过仓储层持久化抓取结果。"""
 
@@ -46,7 +64,7 @@ class BossSearchClient:
         # 按 tab 维度维护列表消费游标，保证续抓时从上次结束下标继续。
         self._tab_card_cursors: dict[str, int] = {}
 
-    async def collect_jobs(self, *, repository, options: BossSearchOptions) -> dict[str, Any]:
+    async def collect_jobs(self, *, repository, options: BossSearchOptions) -> SearchCollectionSummary:
         """执行完整抓取流程：打开页面、等待登录、提取链接、补全 JD、写库。"""
         user_data_dir = os.getenv("BOSS_USER_DATA_DIR", ".nodriver_user_data/boss")
         headless = _env_bool("BOSS_HEADLESS", False)
@@ -69,17 +87,17 @@ class BossSearchClient:
         print(">>> 浏览器将保持打开：你可以手动操作；关闭浏览器窗口结束程序（或 Ctrl+C）")
 
         # 返回基础统计，便于后续 CLI 或主流程直接打印结果。
-        stats = {"stored_links": 0, "jobs_written": 0, "links_found": 0}
+        summary = SearchCollectionSummary()
 
         if not options.no_collect:
-            batch_stats = await self.collect_jobs_from_tab(
+            batch_summary = await self.collect_jobs_from_tab(
                 tab,
                 repository=repository,
                 options=options,
                 session_seen_urls=set(),
                 target_new_jobs=max(options.limit, 0),
             )
-            stats.update(batch_stats)
+            summary.absorb(batch_summary)
 
         try:
             while True:
@@ -95,7 +113,7 @@ class BossSearchClient:
             except Exception:
                 pass
 
-        return stats
+        return summary
 
     async def prepare_search_tab(self, browser, options: BossSearchOptions):
         """在既有浏览器里打开搜索页，并完成登录前置检查。"""
@@ -155,7 +173,7 @@ class BossSearchClient:
         options: BossSearchOptions,
         session_seen_urls: set[str],
         target_new_jobs: int,
-    ) -> dict[str, Any]:
+    ) -> SearchCollectionSummary:
         """从已打开的搜索页继续滚动抓取，直到拿到一批新的岗位。"""
         dump_dir = None
         if options.debug:
@@ -168,13 +186,7 @@ class BossSearchClient:
         keyword = (options.keyword or "").strip() or "Python开发"
         city = (options.city or "").strip() or "深圳"
 
-        stats = {
-            "stored_links": 0,
-            "jobs_written": 0,
-            "links_found": 0,
-            "new_links_found": 0,
-            "new_jobs_written": 0,
-        }
+        summary = SearchCollectionSummary()
         unique_new_links: list[str] = []
         unique_new_jobs: list[JobRecord] = []
         is_followup_round = bool(session_seen_urls)
@@ -213,7 +225,7 @@ class BossSearchClient:
                 start_index=start_card_index,
                 debug=options.debug,
             )
-            stats["links_found"] = max(stats["links_found"], total_cards)
+            summary.links_found = max(summary.links_found, total_cards)
             if options.debug:
                 print(
                     f"[debug] 当前卡片扫描策略: 游标续抓，"
@@ -267,11 +279,11 @@ class BossSearchClient:
         unique_new_links = [link for link in unique_new_links if link in filtered_job_urls][: max(target_new_jobs, 1)]
 
         if unique_new_links:
-            stats["stored_links"] = repository.save_links(unique_new_links, keyword=keyword, city=city)
-            stats["new_links_found"] = len(unique_new_links)
+            summary.stored_links = repository.save_links(unique_new_links, keyword=keyword, city=city)
+            summary.new_links_found = len(unique_new_links)
         if unique_new_jobs:
-            stats["jobs_written"] = repository.save_jobs(unique_new_jobs)
-            stats["new_jobs_written"] = stats["jobs_written"]
+            summary.jobs_written = repository.save_jobs(unique_new_jobs)
+            summary.new_jobs_written = summary.jobs_written
             session_seen_urls.update(job.job_url for job in unique_new_jobs if job.job_url)
 
         if not unique_new_jobs and options.debug and dump_dir is not None:
@@ -285,7 +297,7 @@ class BossSearchClient:
             except Exception:
                 pass
 
-        return stats
+        return summary
 
     def _is_excluded_company(self, company_name: str, excluded_company_names: tuple[str, ...]) -> bool:
         """如果岗位公司与过往任职公司名称相近，则直接过滤掉。"""

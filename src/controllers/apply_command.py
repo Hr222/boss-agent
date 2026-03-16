@@ -1,4 +1,4 @@
-"""CLI controller for Boss apply automation."""
+"""已入队岗位投递命令入口。"""
 
 import argparse
 import os
@@ -14,6 +14,7 @@ from src.models.job_repository import JobRepository
 
 
 async def main() -> None:
+    """解析命令行参数并执行浏览器投递。"""
     if load_dotenv is not None:
         load_dotenv()
 

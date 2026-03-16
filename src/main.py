@@ -3,7 +3,7 @@
 import builtins
 from datetime import datetime
 
-from src.controllers.console_cli_controller import ConsoleController
+from src.controllers.console_command import main as run_console_command
 
 
 _ORIGINAL_PRINT = builtins.print
@@ -90,8 +90,7 @@ def _install_timestamped_print() -> None:
 def main() -> None:
     """启动交互式控制台控制器。"""
     _install_timestamped_print()
-    controller = ConsoleController()
-    controller.run()
+    run_console_command()
 
 
 if __name__ == "__main__":

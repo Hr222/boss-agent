@@ -19,7 +19,8 @@
 ### 手动 JD 分析
 
 `src/main.py`
--> `src/controllers/console_cli_controller.py`
+-> `src/controllers/console_command.py`
+-> `src/controllers/console_controller.py`
 -> `src/views/console_view.py`
 -> `src/models/manual_job_model.py`
 -> `src/models/job_matching_model.py`
@@ -27,7 +28,7 @@
 
 ### 批量筛选岗位
 
-`src/controllers/match_cli_controller.py`
+`src/controllers/match_command.py`
 -> `src/models/job_screening_model.py`
 -> `src/models/job_repository.py`
 -> `src/models/job_matching_model.py`
@@ -35,15 +36,16 @@
 
 ### 自动投递岗位
 
-`src/controllers/apply_cli_controller.py`
+`src/controllers/apply_command.py`
 -> `src/models/job_apply_model.py`
 -> `src/models/job_repository.py`
--> `src/models/boss_apply_browser.py`
+-> `src/models/boss_apply_facade.py`
+-> `src/infrastructure/browser/boss_apply`
 -> nodriver 打开详情页 / 立即沟通 / 输入或发送招呼语
 
 ### 岗位抓取链路
 
-`src/controllers/search_cli_controller.py`
+`src/controllers/search_command.py`
 -> `src/models/job_search_model.py`
 -> `src/infrastructure/browser/boss_search_client.py`
 -> `src/models/job_repository.py`

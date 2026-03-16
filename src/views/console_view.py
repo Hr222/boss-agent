@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-from src.config.settings import Config
+from src.models.job_application_agent import AgentRunSummary
+from src.models.job_screening_model import ScreeningJobResult
 from src.models.resume_profile import ResumeProfile
 from src.models.strategies.strategy_factory import StrategyFactory
 from src.views.console_prompts import collect_manual_job_input, print_banner
@@ -158,7 +159,6 @@ class ConsoleView:
             "strategy_id": self.prompt_strategy_selection(),
             "limit_text": input("本次分析数量(默认 10): ").strip() or "10",
             "threshold_text": input("最低通过分数(默认 75): ").strip() or "75",
-            "out_dir": input("招呼语输出目录(默认 data/greetings): ").strip() or "data/greetings",
         }
 
     def show_invalid_number(self) -> None:
@@ -167,7 +167,7 @@ class ConsoleView:
     def show_no_pending_jobs(self) -> None:
         print("\n暂无待分析岗位（要求 jd 非空且 is_suitable 为空）。")
 
-    def show_batch_results(self, results: list[dict]) -> None:
+    def show_batch_results(self, results: list[ScreeningJobResult]) -> None:
         """展示批量筛选汇总结果。"""
         print("\n" + "=" * 60)
         print("批量分析结果")
@@ -175,16 +175,16 @@ class ConsoleView:
         ok_count = 0
         suitable_count = 0
         for index, item in enumerate(results, 1):
-            if item["status"] != "ok":
-                print(f"{index}. {item['job_title'] or item['job_url']} | 分析失败")
+            if item.status != "ok":
+                print(f"{index}. {item.job_title or item.job_url} | 分析失败")
                 continue
             ok_count += 1
-            suitable_count += int(item["is_suitable"])
+            suitable_count += int(item.is_suitable)
             print(
-                f"{index}. {item['job_title']} | "
-                f"匹配度={item['match_score']:.1f}({item['match_level']}) | "
-                f"推荐={'是' if item['is_recommended'] else '否'} | "
-                f"入投递队列={'是' if item['is_suitable'] else '否'}"
+                f"{index}. {item.job_title} | "
+                f"匹配度={item.match_score:.1f}({item.match_level}) | "
+                f"推荐={'是' if item.is_recommended else '否'} | "
+                f"入投递队列={'是' if item.is_suitable else '否'}"
             )
         print("\n汇总")
         print(f"成功分析: {ok_count}/{len(results)}")
@@ -219,13 +219,13 @@ class ConsoleView:
             "greetings_dir": input("招呼语输出目录(默认 data/greetings): ").strip() or "data/greetings",
         }
 
-    def show_agent_flow_result(self, result: dict) -> None:
+    def show_agent_flow_result(self, result: AgentRunSummary) -> None:
         """展示闭环 Agent 的最终执行结果。"""
         print("\n" + "=" * 60)
         print("闭环 Agent 结果")
         print("=" * 60)
-        print(f"状态: {result.get('status')}")
-        print(f"目标实际投递: {result.get('target_apply_count')}")
-        print(f"累计实际投递: {result.get('sent_count')}")
-        print(f"继续沟通/已沟通: {result.get('already_contacted_count')}")
-        print(f"剩余待投递队列: {result.get('ready_count')}")
+        print(f"状态: {result.status}")
+        print(f"目标实际投递: {result.target_apply_count}")
+        print(f"累计实际投递: {result.sent_count}")
+        print(f"继续沟通/已沟通: {result.already_contacted_count}")
+        print(f"剩余待投递队列: {result.ready_count}")

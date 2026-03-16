@@ -55,7 +55,10 @@ ZAI_API_KEY=your_api_key_here
 ZAI_API_KEY=your_api_key_here
 ZAI_BASE_URL=https://open.bigmodel.cn/api/paas/v4/
 BOSS_DEBUG=0
+BOSS_CHAT_DEBUG=0
 BOSS_DUMP_AFTER_LOGIN=1
+BOSS_APPLY_RETRIES=2
+BOSS_APPLY_MAX_FAILURES=3
 BOSS_USER_DATA_DIR=.nodriver_user_data\\boss
 ```
 
@@ -63,7 +66,10 @@ BOSS_USER_DATA_DIR=.nodriver_user_data\\boss
 
 - `.env` 已在 `.gitignore` 中，不应提交真实密钥
 - `BOSS_DEBUG=1` 时才会输出 `data/boss_debug/` 下的 Boss 页面截图和 HTML
+- `BOSS_CHAT_DEBUG=1` 时会额外输出聊天页跳转、输入、发送前状态和聊天页导出；建议只在定位聊天页问题时开启
 - `BOSS_DUMP_AFTER_LOGIN=1` 只在 `BOSS_DEBUG=1` 的前提下生效，用来控制是否导出登录后的页面
+- `BOSS_APPLY_RETRIES` 表示单个岗位发送失败后的自动重试次数，默认 `2`
+- `BOSS_APPLY_MAX_FAILURES` 表示同一岗位累计失败达到多少次后，从自动投递队列中跳过，默认 `3`
 - 示例配置见 [.env.example](/mnt/c/pycharm/pythonproject/.env.example)
 
 ## 运行方式
@@ -77,38 +83,37 @@ python -m src.main
 抓取 Boss 岗位并落库：
 
 ```bash
-python -m src.controllers.search_cli_controller --keyword "Python开发" --city "深圳" --limit 20 --require-login
+python -m src.controllers.search_command --keyword "Python开发" --city "深圳" --limit 20 --require-login
 ```
 
 批量匹配岗位库：
 
 ```bash
-python -m src.controllers.match_cli_controller --db data/boss_jobs.sqlite3 --limit 10 --threshold 75
+python -m src.controllers.match_command --db data/boss_jobs.sqlite3 --limit 10 --threshold 75
 ```
 
 自动投递已入队岗位：
 
 ```bash
-python -m src.controllers.apply_cli_controller --db data/boss_jobs.sqlite3 --limit 15 --require-login
+python -m src.controllers.apply_command --db data/boss_jobs.sqlite3 --limit 15 --require-login
 ```
 
 闭环求职 Agent：
 
 ```bash
-python -m src.controllers.agent_cli_controller \
+python -m src.controllers.agent_command \
   --db data/boss_jobs.sqlite3 \
-  --keyword "Python开发" \
-  --city "深圳" \
+  --strategy backend_ai \
   --target-apply-count 15 \
   --batch-size 5 \
   --threshold 75 \
-  --require-login
+  --greetings-dir data/greetings
 ```
 
 单岗位预览填充：
 
 ```bash
-python -m src.controllers.apply_cli_controller \
+python -m src.controllers.apply_command \
   --require-login \
   --job-url "https://www.zhipin.com/job_detail/xxx.html" \
   --fill-only \

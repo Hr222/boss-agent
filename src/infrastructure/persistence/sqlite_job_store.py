@@ -291,3 +291,9 @@ class SQLiteJobStore:
                 "UPDATE jobs SET raw_json = ? WHERE job_url = ?",
                 (json.dumps(existing, ensure_ascii=False), job_url),
             )
+
+    def get_job_row(self, job_url: str) -> sqlite3.Row | None:
+        """读取单个岗位完整行，用于状态累计更新。"""
+        self.init()
+        with self._connect() as conn:
+            return conn.execute("SELECT * FROM jobs WHERE job_url = ?", (job_url,)).fetchone()

@@ -1,7 +1,9 @@
 """职位仓储：对 SQLite 中的岗位数据提供统一访问接口。"""
 
 import json
+import os
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -85,20 +87,17 @@ class SQLiteJobRepository:
 
     def get_ready_to_apply_jobs(self, limit: int) -> list[dict[str, Any]]:
         """读取已判定适合、但尚未投递的岗位。"""
-        return [dict(row) for row in self.sqlite.iter_ready_to_apply(limit=limit)]
+        fetch_limit = max(int(limit) * 5, 50)
+        rows = [dict(row) for row in self.sqlite.iter_ready_to_apply(limit=fetch_limit)]
+        max_failures = self._get_apply_failure_limit()
+        ready_rows = [row for row in rows if self._get_apply_fail_count(row) < max_failures]
+        return ready_rows[: max(int(limit), 0)]
 
     def count_ready_to_apply_jobs(self) -> int:
         """统计已入投递队列、但尚未投递的岗位数量。"""
-        self.sqlite.init()
-        with self.sqlite._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT COUNT(*)
-                FROM jobs
-                WHERE (is_suitable = 1) AND (is_applied IS NULL OR is_applied = 0)
-                """
-            ).fetchone()
-        return int(row[0]) if row else 0
+        rows = [dict(row) for row in self.sqlite.iter_ready_to_apply(limit=10000)]
+        max_failures = self._get_apply_failure_limit()
+        return sum(1 for row in rows if self._get_apply_fail_count(row) < max_failures)
 
     def save_match_result(
         self,
@@ -132,6 +131,21 @@ class SQLiteJobRepository:
     def mark_applied(self, job_url: str) -> None:
         """标记岗位已投递。"""
         self.sqlite.set_job_flags(job_url, is_applied=1)
+
+    def mark_apply_failed(self, job_url: str, reason: str = "") -> int:
+        """累计岗位投递失败次数，并返回当前失败总次数。"""
+        self.sqlite.init()
+        row = self.sqlite.get_job_row(job_url)
+        payload = dict(row) if row else {"job_url": job_url}
+        next_fail_count = self._get_apply_fail_count(payload) + 1
+        patch = {
+            "apply_fail_count": next_fail_count,
+            "last_apply_failed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        if reason:
+            patch["last_apply_failure_reason"] = reason
+        self.sqlite.update_raw_json(job_url, patch)
+        return next_fail_count
 
     def build_job_description(self, row: dict[str, Any]) -> JobDescription:
         """把数据库记录转换为业务层使用的 JobDescription。"""
@@ -173,6 +187,26 @@ class SQLiteJobRepository:
         """执行 count 查询并返回整数结果。"""
         row = conn.execute(sql).fetchone()
         return int(row[0]) if row else 0
+
+    @staticmethod
+    def _get_apply_failure_limit() -> int:
+        """达到失败阈值的岗位将不再进入自动投递队列。"""
+        return max(int(os.getenv("BOSS_APPLY_MAX_FAILURES", "3")), 1)
+
+    @staticmethod
+    def _get_apply_fail_count(row: dict[str, Any]) -> int:
+        """从 raw_json 中提取累计投递失败次数。"""
+        raw_json = row.get("raw_json")
+        if not raw_json:
+            return 0
+        try:
+            payload = json.loads(raw_json) or {}
+        except Exception:
+            return 0
+        try:
+            return max(int(payload.get("apply_fail_count", 0)), 0)
+        except Exception:
+            return 0
 
     @staticmethod
     def _clean_jd_text(text: str) -> str:

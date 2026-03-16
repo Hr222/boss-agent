@@ -1,4 +1,4 @@
-"""闭环求职 Agent 的 CLI 控制器。"""
+"""闭环求职 Agent 命令入口。"""
 
 import argparse
 import os
@@ -9,7 +9,7 @@ except ModuleNotFoundError:  # pragma: no cover
     load_dotenv = None
 
 from src.infrastructure.browser.nodriver_runtime import _env_bool, run_async_entrypoint
-from src.models.job_agent_flow_model import JobAgentFlowModel, JobAgentFlowRequest
+from src.models.job_application_agent import JobApplicationAgent, JobApplicationAgentRequest
 from src.models.job_repository import JobRepository
 
 
@@ -27,7 +27,7 @@ async def main() -> None:
     parser.add_argument("--greetings-dir", default=os.getenv("BOSS_GREETINGS_DIR", "data/greetings"))
     args = parser.parse_args()
 
-    request = JobAgentFlowRequest(
+    request = JobApplicationAgentRequest(
         db_path=args.db,
         target_apply_count=args.target_apply_count,
         min_match_batch_size=min(max(args.batch_size, 5), 10),
@@ -37,9 +37,9 @@ async def main() -> None:
         require_login=True,
         debug=_env_bool("BOSS_DEBUG", False),
     )
-    model = JobAgentFlowModel(repository=JobRepository(args.db))
+    model = JobApplicationAgent(repository=JobRepository(args.db))
     result = await model.run(request)
-    print(result)
+    print(result.to_dict())
 
 
 if __name__ == "__main__":
