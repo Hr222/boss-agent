@@ -2,7 +2,6 @@
 
 from src.models.ai_service import AIModel, AIService
 from src.models.boss_apply_facade import BossApplyFacade, BossApplyOptions
-from src.models.greeting_model import GreetingModel
 from src.models.job_apply_model import JobApplyModel, JobApplyRequest
 from src.models.job_application_agent import AgentRunSummary, JobApplicationAgent, JobApplicationAgentRequest
 from src.models.job_description import JobDescription
@@ -20,7 +19,6 @@ __all__ = [
     "AIModel",
     "BossApplyFacade",
     "BossApplyOptions",
-    "GreetingModel",
     "AgentRunSummary",
     "JobApplyModel",
     "JobApplyRequest",

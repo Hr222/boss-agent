@@ -7,6 +7,7 @@ from src.models.strategies.backend_ai_strategy import BackendAIStrategy
 from src.models.strategies.candidate_strategy import CandidateStrategy
 from src.models.strategies.frontend_strategy import FrontendStrategy
 from src.models.strategies.legal_strategy import LegalStrategy
+from src.models.strategies.ui_design_strategy import UIDesignStrategy
 
 
 class StrategyFactory:
@@ -16,6 +17,7 @@ class StrategyFactory:
         BackendAIStrategy.strategy_id: BackendAIStrategy,
         FrontendStrategy.strategy_id: FrontendStrategy,
         LegalStrategy.strategy_id: LegalStrategy,
+        UIDesignStrategy.strategy_id: UIDesignStrategy,
     }
 
     @classmethod
@@ -31,7 +33,7 @@ class StrategyFactory:
         """根据简历内容自动选择最可能的策略。"""
         if resume is None:
             return BackendAIStrategy()
-        for strategy_cls in [LegalStrategy, FrontendStrategy, BackendAIStrategy]:
+        for strategy_cls in [LegalStrategy, UIDesignStrategy, FrontendStrategy, BackendAIStrategy]:
             strategy = strategy_cls()
             if strategy.infer_from_resume(resume):
                 return strategy
@@ -43,6 +45,7 @@ class StrategyFactory:
         return [
             (BackendAIStrategy.strategy_id, BackendAIStrategy.display_name),
             (FrontendStrategy.strategy_id, FrontendStrategy.display_name),
+            (UIDesignStrategy.strategy_id, UIDesignStrategy.display_name),
             (LegalStrategy.strategy_id, LegalStrategy.display_name),
             ("auto", "自动识别"),
         ]

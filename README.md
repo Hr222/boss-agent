@@ -174,6 +174,7 @@ python -m src.controllers.apply_command \
 - 当前主策略包含：
   - `backend_ai`
   - `frontend`
+  - `ui_design`
   - `legal`
   - `auto`
 - 简历主文件为 [data/resume.json](/mnt/c/pycharm/pythonproject/data/resume.json)
