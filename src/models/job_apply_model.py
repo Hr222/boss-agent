@@ -80,7 +80,7 @@ class JobApplyModel:
         """切换当前使用的岗位仓储。"""
         self.repository = repository
 
-    async def apply_ready_jobs(self, request: JobApplyRequest) -> JobApplySummary:
+    async def apply_ready_jobs(self, request: JobApplyRequest, browser=None) -> JobApplySummary:
         """根据请求执行批量投递，或处理单岗位预览。"""
         self.use_repository(JobRepository(request.db_path))
         if request.job_url:
@@ -112,6 +112,7 @@ class JobApplyModel:
             mark_applied=self.repository.mark_applied,
             mark_apply_failed=self.repository.mark_apply_failed,
             options=options,
+            browser=browser,
         )
         return JobApplySummary(results=results)
 

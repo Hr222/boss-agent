@@ -1,6 +1,7 @@
 """控制台控制器：负责把用户输入路由到对应模型。"""
 
 import asyncio
+import os
 from pathlib import Path
 
 from src.config.settings import Config
@@ -13,6 +14,8 @@ from src.models.manual_job_model import ManualJobModel
 from src.models.resume_profile import ResumeProfile
 from src.models.resume_store import ResumeStore
 from src.views.console_view import ConsoleView
+
+_BOSS_ORIGIN = "https://www.zhipin.com"
 
 
 class ConsoleController:
@@ -63,6 +66,9 @@ class ConsoleController:
                 continue
             if choice == "6":
                 self._handle_agent_flow()
+                continue
+            if choice == "7":
+                self._handle_rescore_queue()
                 continue
             self.view.show_invalid_choice()
 
@@ -209,6 +215,161 @@ class ConsoleController:
         )
         result = asyncio.run(self.job_application_agent.run(request))
         self.view.show_agent_flow_result(result)
+
+    def _handle_rescore_queue(self) -> None:
+        """按新阈值重算已分析岗位的入队状态。"""
+        params = self.view.prompt_rescore_queue()
+        try:
+            threshold = float(params["threshold_text"])
+            limit = int(params["limit_text"])
+            apply_count = int(params["apply_count_text"])
+        except ValueError:
+            self.view.show_invalid_number()
+            return
+        if limit <= 0:
+            return
+
+        repository = JobRepository(params["db_path"])
+        print(
+            f"\n[agent] 开始按新阈值重算投递队列："
+            f"目标阈值 {threshold:.1f}，本次最多重算 {limit} 个岗位。"
+        )
+        result = repository.recalculate_suitability_by_threshold(
+            threshold=threshold,
+            limit=limit,
+        )
+        print(
+            f"[agent] 重算完成：已重算 {result['updated']} 个岗位，"
+            f"新增/保留在投递队列 {result['queued']} 个，"
+            f"跳过 {result['skipped']} 个。"
+        )
+        ready_count = repository.count_ready_to_apply_jobs()
+        print(f"[agent] 当前待投递队列：{ready_count} 个。")
+        self.view.show_rescore_result(result)
+        if apply_count <= 0:
+            return
+        asyncio.run(
+            self._run_rescore_apply_flow(
+                repository=repository,
+                db_path=params["db_path"],
+                threshold=threshold,
+                apply_count=apply_count,
+                greetings_dir=params["greetings_dir"],
+                initial_ready_count=ready_count,
+            )
+        )
+
+    async def _run_rescore_apply_flow(
+        self,
+        *,
+        repository: JobRepository,
+        db_path: str,
+        threshold: float,
+        apply_count: int,
+        greetings_dir: str,
+        initial_ready_count: int,
+    ) -> None:
+        """执行菜单 7 的完整闭环：重投已有分数岗位，不足时补分析后继续投递。"""
+        total_processed = 0
+        total_sent = 0
+        total_already_contacted = 0
+        total_failed = 0
+        ready_count = initial_ready_count
+        debug = _env_bool("BOSS_DEBUG", False)
+        strategy_id = os.getenv("BOSS_MATCH_STRATEGY", "backend_ai")
+        browser = None
+
+        async def apply_round(target_count: int, require_login: bool) -> None:
+            nonlocal total_processed, total_sent, total_already_contacted, total_failed
+            request = JobApplyRequest(
+                db_path=db_path,
+                limit=target_count,
+                require_login=require_login,
+                dry_run=False,
+                fill_only=False,
+                no_close_tab=False,
+                greetings_dir=greetings_dir,
+                debug=debug,
+            )
+            summary = await self.job_apply_model.apply_ready_jobs(request, browser=browser)
+            total_processed += summary.processed_count
+            total_sent += summary.sent_count
+            total_already_contacted += summary.already_contacted_count
+            total_failed += summary.failed_count
+            print(
+                f"[agent] 投递完成：本轮实际发送 {summary.sent_count} 个，"
+                f"继续沟通/已沟通 {summary.already_contacted_count} 个，"
+                f"发送失败 {summary.failed_count} 个。"
+            )
+
+        try:
+            if ready_count > 0 or apply_count > 0:
+                browser = await self.job_apply_model.apply_facade._start_browser()
+                bootstrap_tab = await browser.get(_BOSS_ORIGIN, new_window=_env_bool("BOSS_NEW_WINDOW", False))
+                await bootstrap_tab
+                print(f"✓ 已打开: {bootstrap_tab.url}")
+                print(">>> 浏览器已打开，请先手动完成登录。")
+                await self.job_apply_model.apply_facade._ensure_manual_login(bootstrap_tab, debug=debug)
+
+            if ready_count > 0:
+                print(
+                    f"\n[agent] 开始投递："
+                    f"本轮目标实际发送 {min(apply_count, ready_count)} 个，待投递队列 {ready_count} 个。"
+                )
+                await apply_round(apply_count, require_login=False)
+
+            remaining_apply_count = max(apply_count - total_sent, 0)
+            while remaining_apply_count > 0:
+                pending_count = repository.count_pending_jobs()
+                if pending_count <= 0:
+                    print(
+                        f"[agent] 没有更多无历史分数的待分析岗位。"
+                        f"本轮目标还差 {remaining_apply_count} 个，流程结束。"
+                    )
+                    break
+
+                screening_limit = min(remaining_apply_count, pending_count)
+                print(
+                    f"\n[agent] 开始补充投递队列："
+                    f"当前待发送 {remaining_apply_count} 个，待分析岗位 {pending_count} 个。"
+                )
+                self.job_screening_model.use_repository(repository)
+                self.job_screening_model.use_strategy(strategy_id)
+                screening_results = self.job_screening_model.analyze_pending_jobs(
+                    limit=screening_limit,
+                    threshold=threshold,
+                )
+                suitable_count = sum(
+                    int(item.is_suitable)
+                    for item in screening_results
+                    if item.status == "ok"
+                )
+                print(
+                    f"[agent] 匹配完成：分析 {len(screening_results)} 个岗位，"
+                    f"新增入队 {suitable_count} 个。"
+                )
+                ready_count = repository.count_ready_to_apply_jobs()
+                print(f"[agent] 当前待投递队列：{ready_count} 个。")
+                if ready_count <= 0:
+                    continue
+
+                await apply_round(remaining_apply_count, require_login=False)
+                remaining_apply_count = max(apply_count - total_sent, 0)
+        finally:
+            if browser is not None:
+                await self.job_apply_model.apply_facade._safe_close_browser(browser, debug=debug)
+
+        self.view.show_apply_result(
+            processed_count=total_processed,
+            sent_count=total_sent,
+            already_contacted_count=total_already_contacted,
+            failed_count=total_failed,
+        )
+        if total_sent < apply_count:
+            print(
+                f"[agent] 完整流程结束：目标实际发送 {apply_count} 个，"
+                f"当前完成 {total_sent} 个，剩余 {apply_count - total_sent} 个未完成。"
+            )
 
     def _save_result(self, jd_info: dict, match_result: dict, greeting: str) -> Path:
         """把手动分析结果保存为本地文本记录。"""

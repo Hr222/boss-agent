@@ -16,7 +16,7 @@ class BackendAIStrategy(CandidateStrategy):
     strategy_id = "backend_ai"
     display_name = "后端与AI工程化"
     GREETING_POSTSCRIPT = (
-        "PS: 这条消息是我开发的求职agent[正在研发小龙虾版]自动生成(LLM分析JD→个性化生成→主动发送),"
+        "PS: 这条消息是我开发的求职agent自动生成(LLM分析JD→个性化生成→主动发送),"
         "也是我展示自我能力的一部分.后续由本人亲自回复~"
     )
 

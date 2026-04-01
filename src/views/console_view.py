@@ -31,8 +31,9 @@ class ConsoleView:
         print("4. 批量分析岗位库")
         print("5. 自动投递已入队岗位")
         print("6. 运行闭环求职 Agent")
+        print("7. 按新分数重算入队状态")
         print("0. 退出")
-        return input("\n请选择 (0-6): ").strip()
+        return input("\n请选择 (0-7): ").strip()
 
     def show_goodbye(self) -> None:
         print("\n👋 再见！祝求职顺利！")
@@ -218,6 +219,51 @@ class ConsoleView:
             "screening_threshold_text": input("最低通过分数(默认 75): ").strip() or "75",
             "greetings_dir": input("招呼语输出目录(默认 data/greetings): ").strip() or "data/greetings",
         }
+
+    def prompt_rescore_queue(self) -> dict:
+        """采集按新阈值重算入队状态所需参数。"""
+        print("\n" + "=" * 60)
+        print("按新分数重算入队状态")
+        print("=" * 60)
+        return {
+            "db_path": input("岗位库路径(默认 data/boss_jobs.sqlite3): ").strip() or "data/boss_jobs.sqlite3",
+            "threshold_text": input("新的最低通过分数(默认 75): ").strip() or "75",
+            "limit_text": input("本次最多重算多少条(默认 15，输入 0 表示不执行): ").strip() or "15",
+            "apply_count_text": input("本次重算后直接投递多少个(默认 15，输入 0 表示只重算不投递): ").strip() or "15",
+            "greetings_dir": input("招呼语目录(默认 data/greetings): ").strip() or "data/greetings",
+        }
+
+    def show_rescore_result(self, result: dict[str, object]) -> None:
+        """展示按阈值重算入队状态后的结果。"""
+        print("\n" + "=" * 60)
+        print("重算结果")
+        print("=" * 60)
+        print(f"已重算: {result['updated']}")
+        print(f"重算后在投递队列: {result['queued']}")
+        print(f"低于阈值未入队: {result.get('below_threshold', 0)}")
+        print(f"跳过(无有效分数): {result['skipped']}")
+        details = list(result.get("details", []) or [])
+        if not details:
+            return
+        print("\n入队明细")
+        for index, item in enumerate(details, 1):
+            company = f" @ {item['company_name']}" if item.get("company_name") else ""
+            score = "-" if item.get("match_score") is None else f"{float(item['match_score']):.1f}"
+            queued_text = "是" if item.get("is_suitable") else "否"
+            print(
+                f"{index}. {item['job_title']}{company} | "
+                f"score={score} | 入队={queued_text} | 原因={item['reason']}"
+            )
+
+    def show_apply_result(self, processed_count: int, sent_count: int, already_contacted_count: int, failed_count: int) -> None:
+        """展示本轮投递汇总。"""
+        print("\n" + "=" * 60)
+        print("投递结果")
+        print("=" * 60)
+        print(f"本轮处理: {processed_count}")
+        print(f"实际发送: {sent_count}")
+        print(f"继续沟通/已沟通: {already_contacted_count}")
+        print(f"发送失败: {failed_count}")
 
     def show_agent_flow_result(self, result: AgentRunSummary) -> None:
         """展示闭环 Agent 的最终执行结果。"""

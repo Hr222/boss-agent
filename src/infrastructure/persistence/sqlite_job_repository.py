@@ -99,6 +99,94 @@ class SQLiteJobRepository:
         max_failures = self._get_apply_failure_limit()
         return sum(1 for row in rows if self._get_apply_fail_count(row) < max_failures)
 
+    def recalculate_suitability_by_threshold(
+        self,
+        threshold: float,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """按新阈值重算已分析且未投递岗位的入队状态。"""
+        self.sqlite.init()
+        sql = """
+            SELECT job_url, title, company, raw_json
+            FROM jobs
+            WHERE (is_applied IS NULL OR is_applied = 0)
+            ORDER BY captured_at DESC
+        """
+        params: tuple[Any, ...] = ()
+        updated = 0
+        queued = 0
+        skipped = 0
+        below_threshold = 0
+        details: list[dict[str, Any]] = []
+        with self.sqlite._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+
+        for row in rows:
+            payload = self._load_raw_json(row["raw_json"])
+            title = str(row["title"] or row["job_url"] or "").strip()
+            company = str(row["company"] or "").strip()
+            if "match_score" not in payload:
+                skipped += 1
+                continue
+            try:
+                match_score = float(payload.get("match_score", 0) or 0)
+            except Exception:
+                skipped += 1
+                continue
+
+            if match_score < float(threshold):
+                self.sqlite.set_job_flags(str(row["job_url"]), is_suitable=0)
+                self.sqlite.update_raw_json(
+                    str(row["job_url"]),
+                    {
+                        "match_threshold": threshold,
+                        "final_suitability": 0,
+                    },
+                )
+                below_threshold += 1
+                continue
+
+            if limit is not None and int(limit) > 0 and updated >= int(limit):
+                self.sqlite.set_job_flags(str(row["job_url"]), is_suitable=0)
+                self.sqlite.update_raw_json(
+                    str(row["job_url"]),
+                    {
+                        "match_threshold": threshold,
+                        "final_suitability": 0,
+                    },
+                )
+                continue
+
+            is_suitable = 1
+            self.sqlite.set_job_flags(str(row["job_url"]), is_suitable=is_suitable)
+            self.sqlite.update_raw_json(
+                str(row["job_url"]),
+                {
+                    "match_threshold": threshold,
+                    "final_suitability": is_suitable,
+                },
+            )
+            updated += 1
+            queued += is_suitable
+            details.append(
+                {
+                    "job_title": title,
+                    "company_name": company,
+                    "match_score": match_score,
+                    "is_suitable": bool(is_suitable),
+                    "status": "updated",
+                    "reason": "达到阈值",
+                }
+            )
+
+        return {
+            "updated": updated,
+            "queued": queued,
+            "skipped": skipped,
+            "below_threshold": below_threshold,
+            "details": details,
+        }
+
     def save_match_result(
         self,
         job_url: str,
@@ -106,11 +194,8 @@ class SQLiteJobRepository:
         threshold: float,
     ) -> int:
         """保存匹配结果，并返回最终 suitability 状态。"""
-        # Agent 后续动作应以“规则约束后的推荐结果”为主，而不是只看裸分。
-        is_suitable = 1 if (
-            float(match_result.match_score) >= float(threshold)
-            and bool(match_result.is_recommended)
-        ) else 0
+        # 入队阈值以用户本次运行输入为准，不再额外受 is_recommended 限制。
+        is_suitable = 1 if float(match_result.match_score) >= float(threshold) else 0
         self.sqlite.set_job_flags(job_url, is_suitable=is_suitable)
         self.sqlite.update_raw_json(
             job_url,
@@ -131,6 +216,14 @@ class SQLiteJobRepository:
     def mark_applied(self, job_url: str) -> None:
         """标记岗位已投递。"""
         self.sqlite.set_job_flags(job_url, is_applied=1)
+        self.sqlite.update_raw_json(
+            job_url,
+            {
+                "last_applied_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "apply_fail_count": 0,
+                "last_apply_failure_reason": "",
+            },
+        )
 
     def mark_apply_failed(self, job_url: str, reason: str = "") -> int:
         """累计岗位投递失败次数，并返回当前失败总次数。"""
@@ -199,14 +292,20 @@ class SQLiteJobRepository:
         raw_json = row.get("raw_json")
         if not raw_json:
             return 0
-        try:
-            payload = json.loads(raw_json) or {}
-        except Exception:
-            return 0
+        payload = SQLiteJobRepository._load_raw_json(raw_json)
         try:
             return max(int(payload.get("apply_fail_count", 0)), 0)
         except Exception:
             return 0
+
+    @staticmethod
+    def _load_raw_json(raw_json: Any) -> dict[str, Any]:
+        """把 raw_json 尽量安全地解析为字典。"""
+        try:
+            payload = json.loads(raw_json) or {}
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
 
     @staticmethod
     def _clean_jd_text(text: str) -> str:
