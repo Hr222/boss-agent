@@ -23,6 +23,7 @@ class JobApplicationAgentRequest:
     target_apply_count: int = 15
     min_match_batch_size: int = 5
     strategy_id: str = "backend_ai"
+    llm_provider: str = "zhipu"
     screening_threshold: float = 75
     greetings_dir: str = "data/greetings"
     require_login: bool = True
@@ -75,6 +76,7 @@ class JobApplicationAgent:
         repository = JobRepository(request.db_path)
         self.use_repository(repository)
         self.screening_service.use_strategy(request.strategy_id)
+        self.screening_service.use_llm_provider(request.llm_provider)
         Config.resolve_project_path(request.greetings_dir).mkdir(parents=True, exist_ok=True)
 
         browser = await self.apply_facade._start_browser()
@@ -98,6 +100,7 @@ class JobApplicationAgent:
             if excluded_company_names:
                 print(f"[agent] 已启用历史公司过滤：{', '.join(excluded_company_names)}")
             print(f"[agent] 当前匹配策略：{request.strategy_id}")
+            print(f"[agent] 当前 LLM 提供方：{request.llm_provider}")
             search_tab = await self.search_client.prepare_search_tab(browser, search_options)
 
             while total_sent_count < request.target_apply_count:

@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from src.config.settings import Config
 from src.models.job_application_agent import AgentRunSummary
 from src.models.job_screening_model import ScreeningJobResult
 from src.models.resume_profile import ResumeProfile
@@ -19,6 +20,11 @@ class ConsoleView:
     def show_current_resume(self, resume: ResumeProfile) -> None:
         """展示当前加载的简历摘要。"""
         print(f"\n当前简历: {resume.name} | {resume.target_position}")
+
+    def show_current_llm_provider(self, provider: str) -> None:
+        """展示当前会话选择的 LLM 提供方。"""
+        provider_text = "DeepSeek" if provider == "deepseek" else "智谱 / Z.ai"
+        print(f"当前 LLM: {provider_text}")
 
     def get_main_menu_choice(self) -> str:
         """展示主菜单并读取选择。"""
@@ -65,6 +71,17 @@ class ConsoleView:
             print(f"{index}. {display_name}{suffix}")
         selected = input(f"策略编号(默认 {default_index}): ").strip() or default_index
         return option_map.get(selected, default_strategy_id)
+
+    def prompt_llm_provider(self, default_provider: str | None = None) -> str:
+        """采集当前流程使用的 LLM 提供方。"""
+        provider = (default_provider or Config.get_llm_provider()).strip().lower()
+        option_map = {"1": "zhipu", "2": "deepseek"}
+        default_index = "2" if provider == "deepseek" else "1"
+        print("\n请选择 LLM 提供方")
+        print(f"1. 智谱 / Z.ai{' (默认)' if default_index == '1' else ''}")
+        print(f"2. DeepSeek{' (默认)' if default_index == '2' else ''}")
+        selected = input(f"提供方编号(默认 {default_index}): ").strip() or default_index
+        return option_map.get(selected, provider)
 
     def show_manual_job_failed(self) -> None:
         print("\n⚠️  LLM匹配分析失败，跳过")

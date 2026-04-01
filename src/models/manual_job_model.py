@@ -17,6 +17,10 @@ class ManualJobModel:
         """切换当前手动分析使用的策略。"""
         self.matching_model.set_strategy(strategy_id, resume)
 
+    def use_llm_provider(self, provider: str) -> None:
+        """切换当前手动分析使用的 LLM 提供方。"""
+        self.matching_model.set_llm_provider(provider)
+
     def analyze_manual_job(self, jd_info: dict, resume: ResumeProfile) -> JobMatchResult | None:
         """Convert CLI input to a model object and analyze it with the LLM matcher."""
         job = JobDescription(

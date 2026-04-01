@@ -9,6 +9,7 @@ except ModuleNotFoundError:  # pragma: no cover
     load_dotenv = None
 
 from src.infrastructure.browser.nodriver_runtime import _env_bool, run_async_entrypoint
+from src.config.settings import Config
 from src.models.job_application_agent import JobApplicationAgent, JobApplicationAgentRequest
 from src.models.job_repository import JobRepository
 
@@ -24,14 +25,20 @@ async def main() -> None:
     parser.add_argument("--target-apply-count", type=int, default=int(os.getenv("BOSS_TARGET_APPLY_COUNT", "15")))
     parser.add_argument("--batch-size", type=int, default=int(os.getenv("BOSS_MIN_MATCH_BATCH_SIZE", "5")))
     parser.add_argument("--threshold", type=float, default=float(os.getenv("BOSS_MATCH_THRESHOLD", "75")))
+    parser.add_argument("--llm-provider", default=os.getenv("LLM_PROVIDER", Config.get_llm_provider()))
     parser.add_argument("--greetings-dir", default=os.getenv("BOSS_GREETINGS_DIR", "data/greetings"))
     args = parser.parse_args()
+
+    api_key = Config.get_llm_api_key(args.llm_provider)
+    if not api_key or api_key == "your_api_key_here":
+        raise SystemExit(f"Missing API key for provider={args.llm_provider}.")
 
     request = JobApplicationAgentRequest(
         db_path=args.db,
         target_apply_count=args.target_apply_count,
         min_match_batch_size=min(max(args.batch_size, 5), 10),
         strategy_id=args.strategy,
+        llm_provider=args.llm_provider,
         screening_threshold=args.threshold,
         greetings_dir=args.greetings_dir,
         require_login=True,

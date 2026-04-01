@@ -36,13 +36,15 @@ class ConsoleController:
         self.job_screening_model = job_screening_model or JobScreeningModel()
         self.job_apply_model = job_apply_model or JobApplyModel()
         self.job_application_agent = job_application_agent or JobApplicationAgent()
+        self.llm_provider = Config.get_llm_provider()
 
     def run(self) -> None:
         """运行主菜单循环。"""
         self.view.show_banner()
-        self._ensure_api_key()
         resume = self._ensure_resume()
+        self.llm_provider = self.view.prompt_llm_provider(self.llm_provider)
         self.view.show_current_resume(resume)
+        self.view.show_current_llm_provider(self.llm_provider)
 
         while True:
             choice = self.view.get_main_menu_choice()
@@ -72,14 +74,19 @@ class ConsoleController:
                 continue
             self.view.show_invalid_choice()
 
-    def _ensure_api_key(self) -> None:
-        """在进入主流程前统一校验 LLM Key。"""
-        api_key = Config.get_llm_api_key()
-        if not api_key or api_key == "your_api_key_here":
-            print("\n⚠️  请先配置 Z.ai / 智谱 API Key！")
-            print("\n获取方式: https://open.bigmodel.cn/ 或 https://docs.z.ai/")
-            print("配置方法: 编辑 .env 文件，优先设置 ZAI_API_KEY（兼容旧的 ZHIPUAI_API_KEY）")
+    def _ensure_api_key(self, provider: str) -> None:
+        """在进入 LLM 流程前校验对应提供方的 API Key。"""
+        api_key = Config.get_llm_api_key(provider)
+        if api_key and api_key != "your_api_key_here":
+            return
+        if provider == "deepseek":
+            print("\n⚠️  请先配置 DeepSeek API Key！")
+            print("配置方法: 编辑 .env 文件，设置 DEEPSEEK_API_KEY")
             raise SystemExit(1)
+        print("\n⚠️  请先配置 Z.ai / 智谱 API Key！")
+        print("\n获取方式: https://open.bigmodel.cn/ 或 https://docs.z.ai/")
+        print("配置方法: 编辑 .env 文件，优先设置 ZAI_API_KEY（兼容旧的 ZHIPUAI_API_KEY）")
+        raise SystemExit(1)
 
     def _ensure_resume(self) -> ResumeProfile:
         """保证当前系统内有一份可用简历。"""
@@ -100,7 +107,9 @@ class ConsoleController:
             self.view.show_empty_job_description()
             return
         strategy_id = self.view.prompt_strategy_selection()
+        self._ensure_api_key(self.llm_provider)
         self.manual_job_model.use_strategy(strategy_id, resume)
+        self.manual_job_model.use_llm_provider(self.llm_provider)
         self.view.show_manual_job_start(jd_info)
         result = self.manual_job_model.analyze_manual_job(jd_info, resume)
         if result is None:
@@ -161,8 +170,10 @@ class ConsoleController:
         except ValueError:
             self.view.show_invalid_number()
             return
+        self._ensure_api_key(self.llm_provider)
         self.job_screening_model.use_repository(JobRepository(params["db_path"]))
         self.job_screening_model.use_strategy(params["strategy_id"])
+        self.job_screening_model.use_llm_provider(self.llm_provider)
         results = self.job_screening_model.analyze_pending_jobs(
             limit=limit,
             threshold=threshold,
@@ -202,12 +213,14 @@ class ConsoleController:
         except ValueError:
             self.view.show_invalid_number()
             return
+        self._ensure_api_key(self.llm_provider)
 
         request = JobApplicationAgentRequest(
             db_path=params["db_path"],
             target_apply_count=target_apply_count,
             min_match_batch_size=min(max(min_match_batch_size, 5), 10),
             strategy_id=params["strategy_id"],
+            llm_provider=self.llm_provider,
             screening_threshold=screening_threshold,
             require_login=True,
             greetings_dir=params["greetings_dir"],
@@ -256,6 +269,7 @@ class ConsoleController:
                 apply_count=apply_count,
                 greetings_dir=params["greetings_dir"],
                 initial_ready_count=ready_count,
+                llm_provider=self.llm_provider,
             )
         )
 
@@ -268,6 +282,7 @@ class ConsoleController:
         apply_count: int,
         greetings_dir: str,
         initial_ready_count: int,
+        llm_provider: str,
     ) -> None:
         """执行菜单 7 的完整闭环：重投已有分数岗位，不足时补分析后继续投递。"""
         total_processed = 0
@@ -278,6 +293,7 @@ class ConsoleController:
         debug = _env_bool("BOSS_DEBUG", False)
         strategy_id = os.getenv("BOSS_MATCH_STRATEGY", "backend_ai")
         browser = None
+        llm_key_checked = False
 
         async def apply_round(target_count: int, require_login: bool) -> None:
             nonlocal total_processed, total_sent, total_already_contacted, total_failed
@@ -333,8 +349,12 @@ class ConsoleController:
                     f"\n[agent] 开始补充投递队列："
                     f"当前待发送 {remaining_apply_count} 个，待分析岗位 {pending_count} 个。"
                 )
+                if not llm_key_checked:
+                    self._ensure_api_key(llm_provider)
+                    llm_key_checked = True
                 self.job_screening_model.use_repository(repository)
                 self.job_screening_model.use_strategy(strategy_id)
+                self.job_screening_model.use_llm_provider(llm_provider)
                 screening_results = self.job_screening_model.analyze_pending_jobs(
                     limit=screening_limit,
                     threshold=threshold,

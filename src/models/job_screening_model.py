@@ -47,6 +47,10 @@ class JobScreeningModel:
         """切换当前批量筛选使用的策略。"""
         self.matching_model.set_strategy(strategy_id)
 
+    def use_llm_provider(self, provider: str) -> None:
+        """切换当前批量筛选使用的 LLM 提供方。"""
+        self.matching_model.set_llm_provider(provider)
+
     def analyze_pending_jobs(self, limit: int, threshold: float) -> list[ScreeningJobResult]:
         """批量分析未处理岗位。招呼语文件改为发送成功后再归档。"""
         results: list[ScreeningJobResult] = []

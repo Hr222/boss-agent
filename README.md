@@ -49,11 +49,20 @@ cp .env.example .env
 ZAI_API_KEY=your_api_key_here
 ```
 
+如果你使用 `DeepSeek`，则最小必填项改为：
+
+```env
+DEEPSEEK_API_KEY=your_api_key_here
+```
+
 当前项目实际相关的常用变量：
 
 ```env
 ZAI_API_KEY=your_api_key_here
 ZAI_BASE_URL=https://open.bigmodel.cn/api/paas/v4/
+DEEPSEEK_API_KEY=your_api_key_here
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+LLM_PROVIDER=zhipu
 BOSS_DEBUG=0
 BOSS_CHAT_DEBUG=0
 BOSS_DUMP_AFTER_LOGIN=1
@@ -65,6 +74,8 @@ BOSS_USER_DATA_DIR=.nodriver_user_data\\boss
 说明：
 
 - `.env` 已在 `.gitignore` 中，不应提交真实密钥
+- `LLM_PROVIDER` 可选 `zhipu` / `deepseek`，用于设置默认 LLM 提供方
+- 交互式主程序启动后会先统一询问一次 LLM 提供方，后续菜单 `1 / 4 / 6 / 7` 直接复用本次选择
 - `BOSS_DEBUG=1` 时才会输出 `data/boss_debug/` 下的 Boss 页面截图和 HTML
 - `BOSS_CHAT_DEBUG=1` 时会额外输出聊天页跳转、输入、发送前状态和聊天页导出；建议只在定位聊天页问题时开启
 - `BOSS_DUMP_AFTER_LOGIN=1` 只在 `BOSS_DEBUG=1` 的前提下生效，用来控制是否导出登录后的页面
@@ -80,6 +91,13 @@ BOSS_USER_DATA_DIR=.nodriver_user_data\\boss
 python -m src.main
 ```
 
+主交互入口启动后，会先统一询问本轮会话的 `LLM` 提供方：
+
+- `1. 智谱 / Z.ai`
+- `2. DeepSeek`
+
+后续需要 `LLM` 的菜单会直接复用本次选择，不会每个菜单重复询问。
+
 抓取 Boss 岗位并落库：
 
 ```bash
@@ -89,7 +107,7 @@ python -m src.controllers.search_command --keyword "Python开发" --city "深圳
 批量匹配岗位库：
 
 ```bash
-python -m src.controllers.match_command --db data/boss_jobs.sqlite3 --limit 10 --threshold 75
+python -m src.controllers.match_command --db data/boss_jobs.sqlite3 --limit 10 --threshold 75 --llm-provider zhipu
 ```
 
 自动投递已入队岗位：
@@ -104,6 +122,7 @@ python -m src.controllers.apply_command --db data/boss_jobs.sqlite3 --limit 15 -
 python -m src.controllers.agent_command \
   --db data/boss_jobs.sqlite3 \
   --strategy backend_ai \
+  --llm-provider zhipu \
   --target-apply-count 15 \
   --batch-size 5 \
   --threshold 75 \
@@ -128,6 +147,18 @@ python -m src.controllers.apply_command \
 4. 自动打开详情页并发送招呼语
 5. 发送成功后归档到 `data/greetings`
 6. 若累计实际发送仍未满足目标，则继续抓取下一轮
+
+## 菜单 7 说明
+
+交互式主程序中的 `7. 按新分数重算入队状态` 当前流程为：
+
+1. 从数据库中读取最近 `N` 条未投递岗位
+2. 对其中“已有历史分数”的岗位按用户输入阈值重算入队状态
+3. 先消耗这批“达到阈值”的历史可重投岗位
+4. 如果本轮目标还没完成，再从“无历史分数”的未投递岗位里补跑 `LLM` 分析
+5. 分析达到阈值后继续投递，直到目标完成或没有更多可分析岗位
+
+这个流程会共用同一个浏览器会话，整轮只需要手动登录一次。
 
 ## 当前行为说明
 

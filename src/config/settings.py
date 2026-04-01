@@ -18,6 +18,9 @@ class Config:
     ZAI_API_KEY = os.getenv("ZAI_API_KEY", "")
     ZHIPUAI_API_KEY = os.getenv("ZHIPUAI_API_KEY", "")
     ZAI_BASE_URL = os.getenv("ZAI_BASE_URL", "https://open.bigmodel.cn/api/paas/v4/")
+    DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+    DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "zhipu").strip().lower() or "zhipu"
 
     CHROMEDRIVER_PATH = os.getenv("CHROMEDRIVER_PATH", "")
     BOSS_PHONE = os.getenv("BOSS_PHONE", "")
@@ -27,9 +30,17 @@ class Config:
     BOSS_BASE_URL = "https://www.zhipin.com"
 
     @classmethod
-    def get_llm_api_key(cls) -> str:
-        """优先读取新变量名，兼容旧变量名。"""
+    def get_llm_api_key(cls, provider: str | None = None) -> str:
+        """按提供方读取对应 API Key。"""
+        normalized = (provider or cls.LLM_PROVIDER or "zhipu").strip().lower()
+        if normalized == "deepseek":
+            return cls.DEEPSEEK_API_KEY
         return cls.ZAI_API_KEY or cls.ZHIPUAI_API_KEY
+
+    @classmethod
+    def get_llm_provider(cls) -> str:
+        """返回默认 LLM 提供方。"""
+        return cls.LLM_PROVIDER if cls.LLM_PROVIDER in {"zhipu", "deepseek"} else "zhipu"
 
     @classmethod
     def ensure_dirs(cls) -> None:

@@ -27,9 +27,10 @@ class JobMatchingModel:
         self,
         ai_model: Optional[AIModel] = None,
         strategy_id: str = "backend_ai",
+        llm_provider: str | None = None,
     ) -> None:
         """初始化 AI 客户端、简历仓储与当前策略。"""
-        self.client = ai_model or AIModel()
+        self.client = ai_model or AIModel(provider=llm_provider)
         self.resume_store = ResumeStore()
         self.strategy_id = strategy_id
         self.strategy = StrategyFactory.create(strategy_id if strategy_id != "auto" else "backend_ai")
@@ -41,6 +42,10 @@ class JobMatchingModel:
             self.strategy = StrategyFactory.create_auto(resume)
         else:
             self.strategy = StrategyFactory.create(strategy_id)
+
+    def set_llm_provider(self, provider: str) -> None:
+        """切换当前使用的 LLM 提供方。"""
+        self.client = AIModel(provider=provider)
 
     def analyze_match(self, jd: JobDescription, resume: Optional[ResumeProfile] = None) -> Optional[JobMatchResult]:
         """执行完整匹配流程：读取简历、规则预筛、LLM 分析、招呼语生成。"""
