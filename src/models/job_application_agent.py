@@ -179,6 +179,7 @@ class JobApplicationAgent:
                     results=await self.apply_facade.apply_jobs(
                     queue,
                     mark_applied=repository.mark_applied,
+                    mark_apply_skipped=repository.mark_apply_skipped,
                     mark_apply_failed=repository.mark_apply_failed,
                     options=apply_options,
                     browser=browser,

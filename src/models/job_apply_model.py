@@ -110,6 +110,7 @@ class JobApplyModel:
         results = await self.apply_facade.apply_jobs(
             queue,
             mark_applied=self.repository.mark_applied,
+            mark_apply_skipped=self.repository.mark_apply_skipped,
             mark_apply_failed=self.repository.mark_apply_failed,
             options=options,
             browser=browser,

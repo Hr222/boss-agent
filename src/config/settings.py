@@ -30,6 +30,21 @@ class Config:
     BOSS_BASE_URL = "https://www.zhipin.com"
 
     @classmethod
+    def get_browser_executable_path(cls) -> str:
+        """返回显式配置的浏览器可执行文件路径。"""
+        candidates = [
+            os.getenv("BROWSER_EXECUTABLE_PATH", ""),
+            os.getenv("CHROME_EXECUTABLE_PATH", ""),
+            os.getenv("CHROMIUM_EXECUTABLE_PATH", ""),
+            os.getenv("CHROMEDRIVER_PATH", ""),
+        ]
+        for value in candidates:
+            path = (value or "").strip()
+            if path:
+                return str(Path(path).expanduser())
+        return ""
+
+    @classmethod
     def get_llm_api_key(cls, provider: str | None = None) -> str:
         """按提供方读取对应 API Key。"""
         normalized = (provider or cls.LLM_PROVIDER or "zhipu").strip().lower()

@@ -67,6 +67,7 @@ class BossApplyClient:
         queue: list[dict],
         *,
         mark_applied,
+        mark_apply_skipped=None,
         mark_apply_failed=None,
         options: BossApplyOptions,
         browser=None,
@@ -98,6 +99,7 @@ class BossApplyClient:
                     row,
                     greetings_dir=greetings_dir,
                     mark_applied=mark_applied,
+                    mark_apply_skipped=mark_apply_skipped,
                     mark_apply_failed=mark_apply_failed,
                     options=options,
                 )
@@ -147,6 +149,7 @@ class BossApplyClient:
         *,
         greetings_dir: Path,
         mark_applied,
+        mark_apply_skipped,
         mark_apply_failed,
         options: BossApplyOptions,
     ) -> ApplyJobResult:
@@ -163,6 +166,8 @@ class BossApplyClient:
         greeting = self._resolve_greeting(open_url, raw_json, greetings_dir, options)
         if not greeting:
             print(f"跳过（无招呼语）: {open_url}")
+            if callable(mark_apply_skipped) and not options.dry_run and not options.fill_only and not options.job_url:
+                mark_apply_skipped(job_url, "missing_greeting")
             return ApplyJobResult(status="skipped", reason="missing_greeting", job_url=open_url)
 
         print(f"\n[apply] {open_url}")
@@ -255,11 +260,13 @@ class BossApplyClient:
         browser_args = ["--disable-dev-shm-usage", "--no-first-run", "--no-default-browser-check"]
         if disable_extensions:
             browser_args += ["--disable-extensions", "--disable-component-extensions-with-background-pages"]
+        browser_executable_path = Config.get_browser_executable_path()
 
         return await self.uc.start(
             headless=headless,
             user_data_dir=str(profile_dir),
             browser_args=browser_args,
+            browser_executable_path=browser_executable_path or None,
         )
 
     def _resolve_greeting(

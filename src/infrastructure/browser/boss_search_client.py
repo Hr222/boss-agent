@@ -76,11 +76,13 @@ class BossSearchClient:
         browser_args = ["--disable-dev-shm-usage", "--no-first-run", "--no-default-browser-check"]
         if disable_extensions:
             browser_args += ["--disable-extensions", "--disable-component-extensions-with-background-pages"]
+        browser_executable_path = Config.get_browser_executable_path()
 
         browser = await self.uc.start(
             headless=headless,
             user_data_dir=str(profile_dir),
             browser_args=browser_args,
+            browser_executable_path=browser_executable_path or None,
         )
 
         tab = await self.prepare_search_tab(browser, options)

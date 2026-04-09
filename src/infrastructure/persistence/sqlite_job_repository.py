@@ -240,6 +240,16 @@ class SQLiteJobRepository:
         self.sqlite.update_raw_json(job_url, patch)
         return next_fail_count
 
+    def mark_apply_skipped(self, job_url: str, reason: str = "") -> None:
+        """把无法继续自动投递的岗位标记为已处理，避免反复进入投递队列。"""
+        self.sqlite.set_job_flags(job_url, is_applied=1)
+        patch = {
+            "last_apply_skipped_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        if reason:
+            patch["last_apply_skip_reason"] = reason
+        self.sqlite.update_raw_json(job_url, patch)
+
     def build_job_description(self, row: dict[str, Any]) -> JobDescription:
         """把数据库记录转换为业务层使用的 JobDescription。"""
         job_url = str(row.get("job_url") or "").strip()
