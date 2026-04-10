@@ -11,6 +11,7 @@ from src.config.settings import Config
 
 
 POLL_INTERVAL_SEC = float(os.getenv("BOSS_POLL_INTERVAL_SEC", "0.03"))
+SEND_VERIFY_TIMEOUT_SEC = float(os.getenv("BOSS_CHAT_SEND_VERIFY_TIMEOUT_SEC", "5"))
 
 
 class BossApplyChatTemplate:
@@ -24,9 +25,13 @@ class BossApplyChatTemplate:
     async def find_input(self, tab):
         for selector in [
             "#chat-input.chat-input",
+            "#chat-input",
             ".message-controls #chat-input",
             ".chat-editor #chat-input",
             ".chat-editor .chat-input",
+            ".chat-editor [contenteditable='true']",
+            ".message-controls [contenteditable='true']",
+            "[role='textbox'][contenteditable='true']",
         ]:
             try:
                 el = await tab.select(selector, timeout=2)
@@ -186,6 +191,20 @@ class BossApplyChatTemplate:
         return "\n".join(line.rstrip() for line in text.split("\n")).strip()
 
     async def _click_send_button(self, tab, debug: bool) -> bool:
+        for text in ["发送", "发出", "立即发送"]:
+            try:
+                send_btn = await tab.find(text, best_match=True, timeout=1.5)
+            except Exception:
+                send_btn = None
+            if not send_btn:
+                continue
+            try:
+                await send_btn.apply("(btn) => { btn.focus(); btn.click(); }")
+                await tab.sleep(0.25)
+                return True
+            except Exception as error:
+                if self._chat_debug_enabled(debug):
+                    print(f"[debug] 点击聊天页发送文本按钮失败({text}): {error}")
         for selector in [".chat-op .btn-send", ".message-controls .btn-send", "button.btn-send"]:
             try:
                 send_btn = await tab.select(selector, timeout=1)
@@ -434,7 +453,7 @@ class BossApplyChatTemplate:
         before_state: dict[str, object] | None,
         debug: bool,
         *,
-        timeout_sec: float = 2.5,
+        timeout_sec: float = SEND_VERIFY_TIMEOUT_SEC,
     ) -> bool:
         before_state = before_state or {}
         before_count = int(before_state.get("messageCount") or 0)

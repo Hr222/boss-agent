@@ -27,6 +27,7 @@ from src.models.greeting_archive_model import GreetingArchiveModel
 
 
 ORIGIN = "https://www.zhipin.com"
+CHAT_NOT_READY_EXTRA_WAIT_SEC = float(os.getenv("BOSS_CHAT_NOT_READY_EXTRA_WAIT_SEC", "3"))
 
 
 @dataclass(frozen=True)
@@ -191,6 +192,25 @@ class BossApplyClient:
         # 详情页和聊天页之间可能会跳 target，这里统一做收敛。
         prepared_chat = await self._prepare_chat_tab(browser, job_tab, known_target_ids, debug=options.debug)
         job_tab = prepared_chat.tab
+        if prepared_chat.template_type == "chat" and not prepared_chat.ready:
+            if options.debug:
+                print(
+                    f"[debug] chat 页首次未 ready，追加等待 {CHAT_NOT_READY_EXTRA_WAIT_SEC:.1f}s 后再尝试进入输入态"
+                )
+            try:
+                await job_tab.sleep(CHAT_NOT_READY_EXTRA_WAIT_SEC)
+            except Exception:
+                pass
+            extra_ready = await self._wait_for_chat_ready(
+                job_tab,
+                debug=options.debug,
+                timeout_sec=max(CHAT_NOT_READY_EXTRA_WAIT_SEC, 2.0),
+            )
+            prepared_chat = PreparedChatTab(
+                tab=job_tab,
+                template_type=self._resolve_chat_template_type(job_tab),
+                ready=extra_ready,
+            )
         # chat 页一旦触发发送动作，重复重试更容易造成重复消息，因此只做单次尝试。
         retry_attempts = 1 if prepared_chat.template_type == "chat" else (max(int(options.apply_retries), 0) + 1)
         ok = False

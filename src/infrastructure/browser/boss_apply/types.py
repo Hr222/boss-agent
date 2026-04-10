@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from typing import Literal
 
 
-DETAIL_READY_TIMEOUT_SEC = float(os.getenv("BOSS_DETAIL_READY_TIMEOUT_SEC", "1"))
-CHAT_READY_TIMEOUT_SEC = float(os.getenv("BOSS_CHAT_READY_TIMEOUT_SEC", "1"))
-CHAT_TARGET_TIMEOUT_SEC = float(os.getenv("BOSS_CHAT_TARGET_TIMEOUT_SEC", "1"))
+DETAIL_READY_TIMEOUT_SEC = float(os.getenv("BOSS_DETAIL_READY_TIMEOUT_SEC", "3"))
+CHAT_READY_TIMEOUT_SEC = float(os.getenv("BOSS_CHAT_READY_TIMEOUT_SEC", "4"))
+CHAT_TARGET_TIMEOUT_SEC = float(os.getenv("BOSS_CHAT_TARGET_TIMEOUT_SEC", "4"))
 TemplateType = Literal["chat", "legacy"]
 
 

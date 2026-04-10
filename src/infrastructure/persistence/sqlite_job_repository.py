@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src.config.settings import Config
 from src.models.job_description import JobDescription
 from src.models.job_match_result import JobMatchResult
 from src.infrastructure.persistence.sqlite_job_store import JobRecord, SQLiteJobStore
@@ -79,11 +80,14 @@ class SQLiteJobRepository:
 
     def get_pending_jobs(self, limit: int) -> list[dict[str, Any]]:
         """读取待匹配岗位。"""
-        return [dict(row) for row in self.sqlite.iter_pending_jobs(limit=limit)]
+        rows = self._load_pending_rows(limit=max(int(limit) * 5, int(limit), 20))
+        filtered_rows = [row for row in rows if not self._is_screening_deferred_in_cooldown(row)]
+        return filtered_rows[: max(int(limit), 0)]
 
     def count_pending_jobs(self) -> int:
         """统计当前待匹配岗位数量。"""
-        return self.sqlite.count_pending_jobs()
+        rows = self._load_pending_rows(limit=None)
+        return sum(1 for row in rows if not self._is_screening_deferred_in_cooldown(row))
 
     def get_ready_to_apply_jobs(self, limit: int) -> list[dict[str, Any]]:
         """读取已判定适合、但尚未投递的岗位。"""
@@ -250,6 +254,21 @@ class SQLiteJobRepository:
             patch["last_apply_skip_reason"] = reason
         self.sqlite.update_raw_json(job_url, patch)
 
+    def mark_screening_deferred(self, job_url: str, reason: str = "") -> int:
+        """记录临时性筛选失败，保留待分析状态并施加短暂冷却。"""
+        self.sqlite.init()
+        row = self.sqlite.get_job_row(job_url)
+        payload = dict(row) if row else {"job_url": job_url}
+        next_fail_count = self._get_screening_fail_count(payload) + 1
+        patch = {
+            "screening_fail_count": next_fail_count,
+            "last_screening_deferred_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        if reason:
+            patch["last_screening_defer_reason"] = reason
+        self.sqlite.update_raw_json(job_url, patch)
+        return next_fail_count
+
     def build_job_description(self, row: dict[str, Any]) -> JobDescription:
         """把数据库记录转换为业务层使用的 JobDescription。"""
         job_url = str(row.get("job_url") or "").strip()
@@ -307,6 +326,50 @@ class SQLiteJobRepository:
             return max(int(payload.get("apply_fail_count", 0)), 0)
         except Exception:
             return 0
+
+    @staticmethod
+    def _get_screening_fail_count(row: dict[str, Any]) -> int:
+        """从 raw_json 中提取累计筛选暂缓次数。"""
+        raw_json = row.get("raw_json")
+        if not raw_json:
+            return 0
+        payload = SQLiteJobRepository._load_raw_json(raw_json)
+        try:
+            return max(int(payload.get("screening_fail_count", 0)), 0)
+        except Exception:
+            return 0
+
+    def _load_pending_rows(self, limit: int | None) -> list[dict[str, Any]]:
+        """直接从 jobs 表读取待分析岗位，用于附加冷却过滤。"""
+        self.sqlite.init()
+        sql = """
+            SELECT *
+            FROM jobs
+            WHERE (is_suitable IS NULL) AND (jd IS NOT NULL) AND (TRIM(jd) != '')
+            ORDER BY captured_at DESC
+        """
+        params: tuple[Any, ...] = ()
+        if limit is not None:
+            sql += "\nLIMIT ?"
+            params = (int(limit),)
+        with self.sqlite._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [dict(row) for row in rows]
+
+    def _is_screening_deferred_in_cooldown(self, row: dict[str, Any]) -> bool:
+        """判断岗位是否仍处于筛选暂缓冷却窗口。"""
+        payload = self._load_raw_json(row.get("raw_json"))
+        deferred_at = str(payload.get("last_screening_deferred_at") or "").strip()
+        if not deferred_at:
+            return False
+        try:
+            deferred_time = datetime.fromisoformat(deferred_at.replace("Z", "+00:00"))
+        except Exception:
+            return False
+        if deferred_time.tzinfo is None:
+            deferred_time = deferred_time.replace(tzinfo=timezone.utc)
+        elapsed_seconds = (datetime.now(timezone.utc) - deferred_time).total_seconds()
+        return elapsed_seconds < max(int(Config.SCREENING_DEFER_COOLDOWN_SECONDS), 0)
 
     @staticmethod
     def _load_raw_json(raw_json: Any) -> dict[str, Any]:

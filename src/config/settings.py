@@ -18,6 +18,11 @@ class Config:
     ZAI_API_KEY = os.getenv("ZAI_API_KEY", "")
     ZHIPUAI_API_KEY = os.getenv("ZHIPUAI_API_KEY", "")
     ZAI_BASE_URL = os.getenv("ZAI_BASE_URL", "https://open.bigmodel.cn/api/paas/v4/")
+    ZHIPU_RETRY_ATTEMPTS = int(os.getenv("ZHIPU_RETRY_ATTEMPTS", "4"))
+    ZHIPU_RETRY_BASE_DELAY = float(os.getenv("ZHIPU_RETRY_BASE_DELAY", "10"))
+    ZHIPU_RETRY_MAX_DELAY = float(os.getenv("ZHIPU_RETRY_MAX_DELAY", "30"))
+    ZHIPU_RATE_LIMIT_COOLDOWN = float(os.getenv("ZHIPU_RATE_LIMIT_COOLDOWN", "10"))
+    SCREENING_DEFER_COOLDOWN_SECONDS = int(os.getenv("SCREENING_DEFER_COOLDOWN_SECONDS", "30"))
     DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
     DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     LLM_PROVIDER = os.getenv("LLM_PROVIDER", "zhipu").strip().lower() or "zhipu"

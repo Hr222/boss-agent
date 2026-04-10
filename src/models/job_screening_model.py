@@ -14,6 +14,7 @@ class ScreeningJobResult:
     job_title: str
     job_url: str
     status: str
+    reason: str = ""
     match_score: float = 0.0
     match_level: str = ""
     is_recommended: bool = False
@@ -63,12 +64,29 @@ class JobScreeningModel:
             print(f"[screening] {index}/{total_jobs} 开始分析: {job.job_title} @ {job.company_name}")
             match_result = self.matching_model.analyze_match(job)
             if match_result is None:
-                print(f"[screening] {index}/{total_jobs} 分析失败: {job.job_title}")
+                failure_reason = self.matching_model.last_failure_reason or "未知错误"
+                if self.matching_model.last_failure_is_temporary:
+                    defer_count = self.repository.mark_screening_deferred(job.job_url, failure_reason)
+                    print(
+                        f"[screening] {index}/{total_jobs} 暂缓分析: {job.job_title} | "
+                        f"保留待分析，暂缓次数={defer_count}"
+                    )
+                    results.append(
+                        ScreeningJobResult(
+                            job_title=job.job_title,
+                            job_url=job.job_url,
+                            status="deferred",
+                            reason=failure_reason,
+                        )
+                    )
+                    continue
+                print(f"[screening] {index}/{total_jobs} 分析失败: {job.job_title} | reason={failure_reason}")
                 results.append(
                     ScreeningJobResult(
                         job_title=job.job_title,
                         job_url=job.job_url,
                         status="failed",
+                        reason=failure_reason,
                     )
                 )
                 continue

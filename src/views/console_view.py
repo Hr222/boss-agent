@@ -191,8 +191,13 @@ class ConsoleView:
         print("批量分析结果")
         print("=" * 60)
         ok_count = 0
+        deferred_count = 0
         suitable_count = 0
         for index, item in enumerate(results, 1):
+            if item.status == "deferred":
+                deferred_count += 1
+                print(f"{index}. {item.job_title or item.job_url} | 暂缓分析，保留待分析")
+                continue
             if item.status != "ok":
                 print(f"{index}. {item.job_title or item.job_url} | 分析失败")
                 continue
@@ -206,6 +211,7 @@ class ConsoleView:
             )
         print("\n汇总")
         print(f"成功分析: {ok_count}/{len(results)}")
+        print(f"暂缓分析: {deferred_count}/{len(results)}")
         print(f"进入投递队列: {suitable_count}/{len(results)}")
 
     def prompt_job_apply(self) -> dict:

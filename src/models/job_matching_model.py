@@ -10,6 +10,7 @@ from src.models.job_match_result import JobMatchResult
 from src.models.resume_profile import ResumeProfile
 from src.models.resume_store import ResumeStore
 from src.models.strategies.strategy_factory import StrategyFactory
+from src.infrastructure.ai.zhipu_chat_client import LLMTemporaryUnavailableError
 
 
 class JobMatchingModel:
@@ -34,6 +35,8 @@ class JobMatchingModel:
         self.resume_store = ResumeStore()
         self.strategy_id = strategy_id
         self.strategy = StrategyFactory.create(strategy_id if strategy_id != "auto" else "backend_ai")
+        self.last_failure_reason = ""
+        self.last_failure_is_temporary = False
 
     def set_strategy(self, strategy_id: str, resume: ResumeProfile | None = None) -> None:
         """切换当前匹配策略。"""
@@ -49,6 +52,8 @@ class JobMatchingModel:
 
     def analyze_match(self, jd: JobDescription, resume: Optional[ResumeProfile] = None) -> Optional[JobMatchResult]:
         """执行完整匹配流程：读取简历、规则预筛、LLM 分析、招呼语生成。"""
+        self.last_failure_reason = ""
+        self.last_failure_is_temporary = False
         resume = resume or self.resume_store.load_resume()
         if not resume:
             print("错误: 未找到简历，请先创建简历")
@@ -84,10 +89,17 @@ class JobMatchingModel:
                 is_recommended=match_data.get("is_recommended", False),
             )
         except json.JSONDecodeError as error:
+            self.last_failure_reason = f"解析LLM返回结果失败: {error}"
             print(f"解析LLM返回结果失败: {error}")
             print(f"原始返回: {analysis_result}")
             return None
+        except LLMTemporaryUnavailableError as error:
+            self.last_failure_reason = str(error)
+            self.last_failure_is_temporary = True
+            print(f"匹配分析暂缓: {error}")
+            return None
         except Exception as error:
+            self.last_failure_reason = str(error)
             print(f"匹配分析失败: {error}")
             return None
 

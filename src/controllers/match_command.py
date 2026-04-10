@@ -32,6 +32,9 @@ def main() -> None:
         return
 
     for item in results:
+        if item.status == "deferred":
+            print(f"暂缓 {item.job_title or item.job_url} | will retry later")
+            continue
         if item.status != "ok":
             print(f"失败 {item.job_title or item.job_url} | analyze failed")
             continue
