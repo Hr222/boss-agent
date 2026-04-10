@@ -61,6 +61,7 @@ class BossApplyChatTemplate:
             filled = await self._ensure_message_filled(tab, chat_input, normalized_greeting, debug=debug)
             if not filled:
                 return False
+            await self._wait_for_send_ready(tab, debug=debug)
             if dry_run or fill_only:
                 return True
             before_send_state = await self._collect_debug_state(tab)
@@ -191,20 +192,6 @@ class BossApplyChatTemplate:
         return "\n".join(line.rstrip() for line in text.split("\n")).strip()
 
     async def _click_send_button(self, tab, debug: bool) -> bool:
-        for text in ["发送", "发出", "立即发送"]:
-            try:
-                send_btn = await tab.find(text, best_match=True, timeout=1.5)
-            except Exception:
-                send_btn = None
-            if not send_btn:
-                continue
-            try:
-                await send_btn.apply("(btn) => { btn.focus(); btn.click(); }")
-                await tab.sleep(0.25)
-                return True
-            except Exception as error:
-                if self._chat_debug_enabled(debug):
-                    print(f"[debug] 点击聊天页发送文本按钮失败({text}): {error}")
         for selector in [".chat-op .btn-send", ".message-controls .btn-send", "button.btn-send"]:
             try:
                 send_btn = await tab.select(selector, timeout=1)
@@ -229,13 +216,38 @@ class BossApplyChatTemplate:
             if not enabled:
                 continue
             try:
-                await send_btn.apply("(btn) => { btn.focus(); btn.click(); }")
+                await send_btn.apply(
+                    """
+                    (btn) => {
+                        if (!btn) return false;
+                        btn.focus();
+                        btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                        btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                        btn.click();
+                        return true;
+                    }
+                    """
+                )
                 await tab.sleep(0.2)
                 return True
             except Exception as error:
                 if self._chat_debug_enabled(debug):
                     print(f"[debug] 点击聊天页发送按钮失败({selector}): {error}")
                 continue
+        for text in ["发送", "发出", "立即发送"]:
+            try:
+                send_btn = await tab.find(text, best_match=True, timeout=1.5)
+            except Exception:
+                send_btn = None
+            if not send_btn:
+                continue
+            try:
+                await send_btn.apply("(btn) => { btn.focus(); btn.click(); }")
+                await tab.sleep(0.25)
+                return True
+            except Exception as error:
+                if self._chat_debug_enabled(debug):
+                    print(f"[debug] 点击聊天页发送文本按钮失败({text}): {error}")
         return False
 
     async def _send_message(self, tab, greeting: str, *, debug: bool, before_state: dict[str, object]) -> bool:
@@ -243,6 +255,12 @@ class BossApplyChatTemplate:
             await self._log_debug_state(tab, "after_click_send", debug)
             if await self._verify_send_success(tab, greeting, before_state, debug):
                 return True
+        try:
+            chat_input = await self.find_input(tab)
+            if chat_input:
+                await chat_input.apply("(input) => { input.focus(); input.click(); }")
+        except Exception:
+            pass
         await self._press_enter(tab)
         await tab.sleep(0.2)
         await self._log_debug_state(tab, "after_enter", debug)
@@ -311,6 +329,9 @@ class BossApplyChatTemplate:
         )
 
     async def _collect_debug_state(self, tab) -> dict[str, object]:
+        state = await self._collect_debug_state_from_dom(tab)
+        if state:
+            return state
         try:
             payload = await tab.evaluate(
                 """
@@ -343,20 +364,106 @@ class BossApplyChatTemplate:
         except Exception:
             return await self._collect_debug_state_from_html(tab)
 
+    async def _collect_debug_state_from_dom(self, tab) -> dict[str, object]:
+        state: dict[str, object] = {}
+        try:
+            input_el = await self.find_input(tab)
+        except Exception:
+            input_el = None
+        if input_el:
+            state["inputFound"] = True
+            state["inputText"] = await self._safe_apply(
+                input_el,
+                "(input) => (input.innerText || input.textContent || input.value || '').trim()",
+                "",
+            )
+            state["inputHtmlLength"] = int(
+                await self._safe_apply(
+                    input_el,
+                    "(input) => ((input.innerHTML || input.value || '').length)",
+                    0,
+                )
+                or 0
+            )
+        else:
+            state["inputFound"] = False
+            state["inputText"] = ""
+            state["inputHtmlLength"] = 0
+
+        send_btn = None
+        for selector in [".chat-op .btn-send", ".message-controls .btn-send", "button.btn-send"]:
+            try:
+                send_btn = await tab.select(selector, timeout=0.8)
+            except Exception:
+                send_btn = None
+            if send_btn:
+                break
+        if send_btn:
+            state["sendBtnFound"] = True
+            state["sendBtnDisabled"] = bool(
+                await self._safe_apply(
+                    send_btn,
+                    """
+                    (btn) => !!(btn && (
+                        btn.classList.contains('disabled')
+                        || btn.hasAttribute('disabled')
+                        || btn.getAttribute('aria-disabled') === 'true'
+                    ))
+                    """,
+                    False,
+                )
+            )
+            state["sendBtnText"] = await self._safe_apply(
+                send_btn,
+                "(btn) => (btn.innerText || btn.textContent || '').trim()",
+                "",
+            )
+        else:
+            state["sendBtnFound"] = False
+            state["sendBtnDisabled"] = False
+            state["sendBtnText"] = ""
+
+        try:
+            meta = await tab.evaluate(
+                """
+                () => {
+                    const active = document.activeElement;
+                    const messages = Array.from(document.querySelectorAll('.im-list li, .chat-message li'));
+                    const lastMessage = messages.length ? messages[messages.length - 1] : null;
+                    return {
+                        activeTag: active ? active.tagName : '',
+                        activeId: active ? (active.id || '') : '',
+                        activeClass: active ? (active.className || '') : '',
+                        messageCount: messages.length,
+                        lastMessageText: lastMessage ? ((lastMessage.innerText || lastMessage.textContent || '').trim().slice(0, 120)) : '',
+                    };
+                }
+                """
+            )
+            if meta:
+                state.update(meta)
+        except Exception:
+            html_state = await self._collect_debug_state_from_html(tab)
+            if html_state:
+                for key in ["activeTag", "activeId", "activeClass", "messageCount", "lastMessageText"]:
+                    if key in html_state:
+                        state[key] = html_state[key]
+        return state
+
     async def _collect_debug_state_from_html(self, tab) -> dict[str, object]:
         """当 evaluate 失效时，从整页 HTML 做弱解析，至少保证发送校验可用。"""
         html = await self._safe_get_content(tab)
         if not html:
             return {}
         input_match = re.search(
-            r'<div[^>]+id="chat-input"[^>]*class="[^"]*chat-input[^"]*"[^>]*>(.*?)</div>',
+            r'<div[^>]*id="chat-input"[^>]*>([\s\S]*?)</div>\s*<div[^>]*class="[^"]*chat-op[^"]*"',
             html,
-            flags=re.DOTALL | re.IGNORECASE,
+            flags=re.IGNORECASE,
         )
         send_btn_match = re.search(
-            r'<button[^>]*class="[^"]*btn-send([^"]*)"[^>]*>(.*?)</button>',
+            r'<button[^>]*class="(?P<class_attr>[^"]*btn-send[^"]*)"[^>]*>(?P<text>[\s\S]*?)</button>',
             html,
-            flags=re.DOTALL | re.IGNORECASE,
+            flags=re.IGNORECASE,
         )
         myself_blocks = re.findall(
             r'<li[^>]*class="[^"]*item-myself[^"]*"[^>]*>(.*?)</li>',
@@ -376,7 +483,7 @@ class BossApplyChatTemplate:
             "inputText": input_text,
             "inputHtmlLength": len(input_match.group(1)) if input_match else 0,
             "sendBtnFound": bool(send_btn_match),
-            "sendBtnDisabled": "disabled" in (send_btn_classes or ""),
+            "sendBtnDisabled": "disabled" in ((send_btn_classes or "").lower()),
             "sendBtnText": send_btn_text,
             "messageCount": len(myself_blocks),
             "lastMessageText": last_text[:120],
@@ -475,10 +582,21 @@ class BossApplyChatTemplate:
                 if self._chat_debug_enabled(debug):
                     print("[debug] chat-page send verified: matched outgoing message in page HTML")
                 return True
+            if before_input and not after_input and bool(last_state.get("sendBtnDisabled")):
+                if self._chat_debug_enabled(debug):
+                    print("[debug] chat-page send verified: input cleared and send button disabled")
+                return True
             if after_count > before_count and before_input and len(after_input) < max(4, len(before_input) // 3):
                 if self._chat_debug_enabled(debug):
                     print("[debug] chat-page send verified: message count increased and input cleared")
                 return True
+            if before_input and len(after_input) < max(1, len(before_input) // 8):
+                send_btn_disabled = bool(last_state.get("sendBtnDisabled"))
+                no_longer_matches = not self._message_matches_greeting(after_input, greeting)
+                if send_btn_disabled and no_longer_matches:
+                    if self._chat_debug_enabled(debug):
+                        print("[debug] chat-page send verified: input nearly cleared and button returned to disabled")
+                    return True
             await tab.sleep(POLL_INTERVAL_SEC)
 
         if self._chat_debug_enabled(debug):
@@ -515,6 +633,25 @@ class BossApplyChatTemplate:
             return content or ""
         except Exception:
             return ""
+
+    async def _safe_apply(self, element, script: str, default):
+        try:
+            result = await element.apply(script)
+        except Exception:
+            return default
+        return default if result is None else result
+
+    async def _wait_for_send_ready(self, tab, debug: bool, *, timeout_sec: float = 1.5) -> bool:
+        deadline = asyncio.get_running_loop().time() + timeout_sec
+        while asyncio.get_running_loop().time() < deadline:
+            state = await self._collect_debug_state(tab)
+            if state.get("inputFound") and state.get("inputText") and state.get("sendBtnFound"):
+                if not bool(state.get("sendBtnDisabled")):
+                    return True
+            await tab.sleep(POLL_INTERVAL_SEC)
+        if self._chat_debug_enabled(debug):
+            print("[debug] chat-page 发送按钮在预期时间内未进入可点击状态，继续尝试发送")
+        return False
 
     def _extract_text_from_html(self, raw_html: str) -> str:
         text = re.sub(r"<br\s*/?>", "\n", raw_html or "", flags=re.IGNORECASE)
